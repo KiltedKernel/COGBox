@@ -206,12 +206,20 @@ COGBox's **FABRICATOR** screen (the launcher's FABRICATOR button, or **More in F
    such files, they are left out and the install says so. `fabricator.json` is never packed, and a zip's own is ignored.
 4. **Make a zip.** Pick where to save it; its name is the mod's name and version. Test it by adding it to your own
    LIBRARY.
-5. **Publish it** where you like. COGBox has no mod hosting. A common place is Nexus Mods (nexusmods.com), which COGBox
-   plans to browse later:
+5. **Publish it** where you like. COGBox has no mod hosting. A common place is Nexus Mods (nexusmods.com), which a test
+   build of COGBox can browse (not in a release yet; it needs Nexus Mods' approval first):
    1. Make a mod page for your game there.
-   2. Upload the zip as the main file.
-   3. Add the **COGBox** tag.
+   2. Upload the zip as the main file. Upload it as a **`.zip`**: COGBox installs `.zip` files only, and a `.7z` or
+      `.rar` is refused with a message.
+   3. Add the **COGBox** tag. The STORE's "Made for COGBox" list shows the mods with that tag, and marks them with a
+      COGBox label.
    4. Say which COGBox version it needs (the CREATOR tab shows the version you have).
+
+   In the STORE, a player sees your mod's picture, name, version, endorsements, downloads, tags, summary, description
+   and files (the main file first), and a View on Nexus Mods button. Get downloads the file for a Premium member or, for
+   everyone else, opens the file's page in their browser and adds the file from their Downloads folder. The STORE hides
+   adult mods unless the player is signed in and allows them. See `docs/nexus-integration.md` for what COGBox asks
+   Nexus Mods.
 
 Don't put the game's own files, or files made from them, in what you share (see "The folder" above). Using Nexus Mods
 doesn't mean Nexus Mods supports or endorses COGBox, and its own rules apply to your page.

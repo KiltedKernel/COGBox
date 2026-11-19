@@ -12,7 +12,14 @@
     and is installed once the game is closed; a row's Update and Uninstall, on / off and the order refuse with "Close
     the game first.". Program files in a mod (programs, libraries, scripts, installers, shortcuts, archives inside the
     zip) are left out, and the install names them.
-  - **STORE:** a coming-soon note: mods from Nexus Mods are planned; there is no online mod library yet.
+  - **STORE:** a coming-soon note: mods from Nexus Mods are planned; there is no online mod library yet. The code for it
+    is in the source but behind a build switch (`COGBOX_FAB_NEXUS=1 sh build.sh`), so **this release has none of it**
+    until Nexus Mods approves COGBox's app. A test build can browse and search Nexus Mods' mods for the four games (with
+    Online play on; "Made for COGBox" shows the mods tagged COGBox), open a mod's page, and get a `.zip` file: with Nexus
+    Mods Premium it is downloaded and added, otherwise the page opens in your browser and COGBox adds the file from your
+    Downloads folder. Sign in with Nexus Mods (tokens in Windows Credential Manager) and a LIBRARY "Check for updates"
+    for mods added from Nexus Mods are there too. Adult mods are hidden unless your Nexus Mods setting allows them. See
+    `docs/nexus-integration.md`, `PRIVACY.md` and `LEGAL.md`.
   - **CREATOR:** check a mod folder for what a clean package needs (a mod.ini with Name and Game, no program files,
     safe file names, the limits: 50 000 files, 8 GiB unpacked, mod.ini 256 KB; the 4 GiB zip limit is checked when the
     zip is made), edit its mod.ini in a form (Name, Game, Version, Author, Description, Side, Requires; other

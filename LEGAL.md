@@ -98,10 +98,13 @@ them on and off, orders them, updates them and uninstalls them.
   (programs and libraries, scripts, installers, shortcuts and similar) and archives inside the mod are never copied into
   the mods folder, and the install tells you which were left out. This is a safety measure, not a guarantee that a mod
   is safe.
-- **Mods from Nexus Mods are planned,** not available yet. When they are, they will be subject to Nexus Mods' own
-  terms and the mod author's, and COGBox is not made, endorsed or sponsored by Nexus Mods.
+- **Mods from Nexus Mods** (test builds only, until Nexus Mods approves COGBox's app; not in any release yet) are
+  hosted by Nexus Mods and are subject to Nexus Mods' terms and the mod author's. COGBox only shows them and, when you
+  ask, helps you download and install a file; it doesn't host, copy or vouch for them. COGBox is not made, endorsed or
+  sponsored by Nexus Mods.
 
-See `PRIVACY.md` for what the Fabricator stores on your PC (it sends nothing).
+See `PRIVACY.md` for what the Fabricator stores on your PC (it sends nothing, apart from the Nexus Mods test build
+it describes).
 
 ## 12. Concerns and takedown requests
 
