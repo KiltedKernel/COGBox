@@ -83,6 +83,9 @@ struct FabJob {
     Uint64 pickup_until = 0, pickup_next = 0;
     std::string pickup_seen;
     int64_t pickup_size = -1;
+    bool pickup_manual = false;   // no Downloads folder: nothing is watched, the player chooses the file
+    std::string pickup_found;     // the file found in Downloads while "Add {file}?" is asked
+    std::string fail_text;        // (worker) a Nexus file COGBox can't install: said as it is (not "can't be added: ...")
 #endif
 };
 
@@ -133,6 +136,69 @@ struct FabNexusUpdates {
 };
 FabNexusUpdates fab_nexus_updates(int g);
 void fab_nexus_update(App &a, int g, const std::string &folder);
+
+// ---- the STORE: browsing Nexus Mods (GraphQL, no sign-in needed) ----
+// Nothing is asked for with Online play off. The requests run on the store's own thread (an install never holds them
+// up); list and page answers are kept in memory for 5 min; nothing is written to disk.
+bool fab_store_online(const App &a);
+// Once a frame while the STORE shows: the games looked up the first time (one request per game domain, once per run;
+// only answers that worked are kept), and the account read from Credential Manager every few seconds.
+void fab_store_open(App &a);
+struct FabStoreGame {
+    int g = -1;            // GameId
+    std::string domain;    // gearsofwar3 ...
+    int game_id = 0;       // Nexus Mods' id
+};
+struct FabStoreGames {
+    bool looking = false, done = false;
+    std::string problem;                 // "" or why a lookup failed (Try again looks up the missing ones)
+    std::vector<FabStoreGame> games;     // only the games Nexus Mods has
+};
+FabStoreGames fab_store_games();
+void fab_store_games_retry();
+
+// The grid: the page of mods for a query. Called every frame with the query wanted; a new one is answered from the
+// cache or asked for (a query no longer wanted when its turn comes is not sent).
+struct FabStoreList {
+    bool loading = false;
+    std::string problem;
+    NexusQuery q;                 // the query this answers
+    bool answered = false;        // mods / total are its answer
+    std::vector<NexusMod> mods;
+    int total = 0;
+};
+FabStoreList fab_store_list(App &a, const NexusQuery &q);
+// A mod's page: the mod (with its description) and its files.
+struct FabStorePage {
+    bool loading = false;
+    std::string problem;
+    std::string domain;
+    int64_t mod_id = 0;
+    bool answered = false;
+    NexusMod mod;
+    std::vector<NexusFile> files;
+    bool files_ok = false;
+};
+FabStorePage fab_store_page(App &a, const std::string &domain, int game_id, int64_t mod_id);
+void fab_store_forget_failures();   // Try again: the next call asks again
+
+// A picture of a mod (https on Nexus Mods' hosts only, at most 8 MiB and 3840x2160, PNG or JPEG), fetched once and
+// kept as a texture (null until it is there, or when it can't be). The textures are freed when the screen closes.
+SDL_Texture *fab_store_picture(App &a, const std::string &url, int *w, int *h);
+
+// The Nexus Mods account: one sign-in at a time (its own thread; the browser approves it), sign-out, and whether
+// adult mods may be shown (signed in and the player's Nexus Mods preference says so; unknown = no).
+struct FabNexusAccountState {
+    bool available = false;      // a client ID is built in (else "Sign in - coming soon")
+    bool signing_in = false, signing_out = false, signed_in = false;
+    std::string name;
+    std::string problem;         // "" or the last sign-in / session problem ("You were signed out of Nexus Mods ...")
+    bool allow_adult = false;
+};
+FabNexusAccountState fab_nexus_account_state();
+void fab_nexus_sign_in(App &a);
+void fab_nexus_sign_in_cancel();
+void fab_nexus_sign_out(App &a);
 #endif
 
 // The Fabricator's questions (ask tags "fabupdate", "fabuninstall"), from main.cpp's modal answers.

@@ -260,6 +260,9 @@ static void answered(App &a)
         a.misplacedAsked[m.game] = false;
     }
     else if (m.tag == "fabupdate" || m.tag == "fabuninstall") fab_answer(a, m);   // the Fabricator's questions
+#ifdef COGBOX_FAB_NEXUS
+    else if (m.tag == "fabnexusadd") fab_answer(a, m);   // "Add {file}?" for a Nexus Mods download found in Downloads
+#endif
     else if (m.tag == "achreveal") achievements_reveal_answer(a, m.answer);   // achievements part 4
     else if (m.tag == "socialremove") social_remove_answer(m.answer);   // social step 3
     else if (m.tag == "socialdelete") social_delete_answer(a, m.answer);   // 0.6.0 review: delete the online account

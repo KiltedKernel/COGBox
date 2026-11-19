@@ -1,7 +1,9 @@
 // COGBox - the FABRICATOR screen: COGBox's local mod manager. Three tabs (LB / RB switch them):
 //   LIBRARY  each game's mods in load order - on / off, up / down, open the folder, update and uninstall what COGBox
 //            installed - and Add a mod (a .zip or a folder, chosen or dropped on the window);
-//   STORE    a placeholder: mods from Nexus Mods come later;
+//   STORE    a placeholder: mods from Nexus Mods come later (COGBOX_FAB_NEXUS builds: browse Nexus Mods - a game's mods,
+//            a mod's page and files, Get - and sign in; only with Online play on, and only through fabricator_state's
+//            Nexus Mods requests);
 //   CREATOR  a mod folder checked, its mod.ini edited in a form, a clean zip made, and how to publish it on Nexus Mods.
 // It looks like a game's settings page (page.cpp's panel, tabs, sections and buttons). The long parts run on
 // fabricator_state.cpp's worker; this file only draws and starts them. Nothing here goes on the network.
@@ -17,6 +19,9 @@
 #include <cfloat>
 #include <cmath>
 #include <functional>
+#ifdef COGBOX_FAB_NEXUS
+#include <map>
+#endif
 
 // page.cpp's building blocks, so this screen looks like the settings pages
 void ui_section(const char *title_en);
@@ -158,6 +163,10 @@ std::string phase_text(const FabJob &j)
     case FabJob::Waiting: return tr("Waiting for the game to close");
     case FabJob::Unpacking: return tr("Unpacking");
     case FabJob::Unpacked: return tr("Waiting for the game to close");
+#ifdef COGBOX_FAB_NEXUS
+    case FabJob::Downloading: return total > 0 ? trf("Downloading {1}%", { std::to_string((int)std::min<int64_t>(100, done * 100 / total)) }) : tr("Downloading");
+    case FabJob::Pickup: return tr("Waiting for your download");
+#endif
     default: return "";
     }
 }
@@ -185,7 +194,15 @@ void jobs_section(App &a)
         if (bx1 - bx0 > S(40)) {
             dl->AddRectFilled(ImVec2(bx0, y - S(3)), ImVec2(bx1, y + S(3)), U(col::faint, 0.5f), S(3));
             const int ph = j->phase;
+#ifdef COGBOX_FAB_NEXUS
+            const bool working = ph == FabJob::Packing || ph == FabJob::Checking || ph == FabJob::Unpacking || ph == FabJob::Downloading;
+            if (ph == FabJob::Downloading && total > 0) {
+                const float f = (float)std::min<int64_t>(total, done) / (float)total;
+                dl->AddRectFilled(ImVec2(bx0, y - S(3)), ImVec2(bx0 + (bx1 - bx0) * f, y + S(3)), U(col::amber), S(3));
+            } else
+#else
             const bool working = ph == FabJob::Packing || ph == FabJob::Checking || ph == FabJob::Unpacking;
+#endif
             if (ph == FabJob::Packing && total > 0) {
                 const float f = (float)std::min<int64_t>(total, done) / (float)total;
                 dl->AddRectFilled(ImVec2(bx0, y - S(3)), ImVec2(bx0 + (bx1 - bx0) * f, y + S(3)), U(col::amber), S(3));
@@ -198,6 +215,24 @@ void jobs_section(App &a)
             ImGui::SameLine(ui_row_x1() - ImGui::GetWindowPos().x + ImGui::GetScrollX() - btn_w("Cancel"));
             if (btn("Cancel")) fab_cancel(j);
         }
+#ifdef COGBOX_FAB_NEXUS
+        if (j->phase == FabJob::Pickup) {   // the free flow: the browser's download, or the file chosen
+            ui_note(std::string(tr(j->pickup_manual ? "Download it on Nexus Mods, then choose the file" :
+                                   "Download it on Nexus Mods - COGBox will add it when the download finishes. Or choose the file")) + "\xE2\x80\xA6", col::text);
+            if (btn("Choose the file\xE2\x80\xA6")) {
+                const std::string zip = pick_file(L"Choose the mod's .zip you downloaded from Nexus Mods", kZipFilter);
+                if (!zip.empty()) {
+                    NexusMod m;
+                    m.mod_id = j->nexus.mod_id;
+                    m.domain = j->nexus.game_domain;
+                    m.name = j->name;
+                    NexusFile f;
+                    f.file_id = j->nexus.file_id;
+                    fab_nexus_choose_file(a, j->want_game, m, f, zip);
+                }
+            }
+        }
+#endif
         ImGui::PopID();
     }
     (void)a;
@@ -225,6 +260,15 @@ void library_row(App &a, int g, const FabLibRow &r, size_t i, size_t n)
     struct B { const char *label; bool enabled; int what; };
     std::vector<B> bs;
     if (r.rec) { bs.push_back({ "Uninstall", !gameRuns, 4 }); bs.push_back({ "Update...", !gameRuns, 3 }); }
+#ifdef COGBOX_FAB_NEXUS
+    const bool fromNexus = r.rec && r.rec->source.kind == "nexus";
+    if (fromNexus) {   // Update (when the check found one), and the mod's page on Nexus Mods
+        const FabNexusUpdates u = fab_nexus_updates(g);
+        auto it = u.by_folder.find(m.folder);
+        if (it != u.by_folder.end() && it->second.available) bs.push_back({ "Update", !gameRuns, 6 });
+        bs.push_back({ "View on Nexus Mods", true, 5 });
+    }
+#endif
     bs.push_back({ "Open folder", true, 2 });
     bs.push_back({ "Down", !gameRuns && i + 1 < n, 1 });
     bs.push_back({ "Up", !gameRuns && i > 0, 0 });
@@ -288,12 +332,24 @@ void library_row(App &a, int g, const FabLibRow &r, size_t i, size_t n)
                 break;
             }
             case 4: fab_uninstall_ask(a, g, m); break;
+#ifdef COGBOX_FAB_NEXUS
+            case 5: {
+                const std::string url = nexus_mod_url(r.rec->source.game_domain, r.rec->source.mod_id);
+                if (url.rfind("https://www.nexusmods.com/", 0) == 0) shell_open(url);
+                break;
+            }
+            case 6: fab_nexus_update(a, g, m.folder); break;
+#endif
             }
         }
         if (!bs[k].enabled && gameRuns) ui_tip("Close the game first.");
         else if (bs[k].what == 3) ui_tip("Choose the new version's .zip. Your on / off choice and the order stay as they are; the old version is kept in the mods folder's .fabricator-backup.");
         else if (bs[k].what == 4) ui_tip("Moves the mod to the mods folder's .fabricator-backup (it can be put back by hand).");
         else if (bs[k].what <= 1) ui_tip("The lower mod wins where two change the same file.");
+#ifdef COGBOX_FAB_NEXUS
+        else if (bs[k].what == 5) ui_tip("Opens the mod's page on Nexus Mods in your browser.");
+        else if (bs[k].what == 6) ui_tip("Gets the newer file from Nexus Mods. Your on / off choice and the order stay as they are; the old version is kept in the mods folder's .fabricator-backup.");
+#endif
     }
     float ly = r0.y + top;
     for (auto &l : lines) {
@@ -336,6 +392,24 @@ void library_tab(App &a)
         ImGui::SameLine();
         if (btn("Mods folder")) open_game_mods(a, g);
         ui_tip(trf("Open {1}'s mods folder.", { game_def(g).shortName }));
+#ifdef COGBOX_FAB_NEXUS
+        bool anyNexus = false;
+        for (const FabLibRow &r : fab_library(a, g)) anyNexus |= r.rec && r.rec->source.kind == "nexus";
+        if (anyNexus) {   // the mods from Nexus Mods: newer files looked for (the rows then show Update)
+            const FabNexusUpdates u = fab_nexus_updates(g);
+            const bool online = fab_store_online(a);
+            ImGui::SameLine();
+            if (btn("Check for updates", online && !u.checking)) fab_nexus_check_updates(a, g);
+            ui_tip(online ? "Asks Nexus Mods whether the mods you got there have newer files." : "Turn on Online play to check Nexus Mods for updates.");
+            if (u.checking) {
+                ImGui::SameLine(0, S(10));
+                ImGui::AlignTextToFramePadding();
+                ImGui::PushStyleColor(ImGuiCol_Text, col::amber);
+                ImGui::TextUnformatted((std::string(tr("Checking")) + "\xE2\x80\xA6").c_str());
+                ImGui::PopStyleColor();
+            }
+        }
+#endif
     }
     ImGui::Dummy(ImVec2(0, S(2)));
     ui_note("Or drop a mod's .zip or folder on this window. A mod.ini for another game adds it to that game.");
@@ -350,17 +424,576 @@ void library_tab(App &a)
 }
 
 // ---- STORE ------------------------------------------------------------------------------------------------------------
+#ifdef COGBOX_FAB_NEXUS
+// ---- STORE: Nexus Mods ------------------------------------------------------------------------------------------------
+// Everything Nexus Mods sends is the server's text: drawn with TextUnformatted / AddText / "%s" only.
+const char *const kEllipsis = "\xE2\x80\xA6";
+const char *const kSortKeys[] = { "endorsements", "downloads", "updatedAt", "createdAt", "name" };
+const char *const kSortNames[] = { "Most endorsed", "Most downloaded", "Recently updated", "Newest", "Name" };
+const int kPerPage = 12;
+const size_t kDescriptionMax = 20 * 1024;
+
+struct StoreUi {
+    int game = -1;                        // GameId shown
+    std::string search, searchSent;       // the box, and what was sent (400 ms after typing stops)
+    double searchAt = 0;
+    int sort = 0;
+    std::map<std::string, int> cogDefault;   // "Made for COGBox" per domain: -1 being decided, 0 off, 1 on
+    bool cogbox = true;
+    int offset = 0;
+    bool page = false;                    // a mod's page is open
+    NexusMod mod;                         // its card (shown until the page's answer is there)
+};
+StoreUi g_st;
+
+void open_nexus(const std::string &domain, int64_t mod_id, int64_t file_id = 0)
+{
+    const std::string url = nexus_mod_url(domain, mod_id, file_id);
+    if (url.rfind("https://www.nexusmods.com/", 0) == 0) shell_open(url);   // (www.nexusmods.com over https only)
+}
+
+// a number as players read it: 950, 12.3k, 4.5M
+std::string compact(int64_t n)
+{
+    char b[32];
+    if (n < 1000) snprintf(b, sizeof b, "%lld", (long long)n);
+    else if (n < 1000000) snprintf(b, sizeof b, "%.1fk", n / 1000.0);
+    else snprintf(b, sizeof b, "%.1fM", n / 1000000.0);
+    return b;
+}
+std::string size_text(int64_t bytes)
+{
+    char b[32];
+    if (bytes <= 0) return "";
+    if (bytes < 1024 * 1024) snprintf(b, sizeof b, "%.0f KB", std::max(1.0, bytes / 1024.0));
+    else if (bytes < 1024ll * 1024 * 1024) snprintf(b, sizeof b, "%.1f MB", bytes / (1024.0 * 1024));
+    else snprintf(b, sizeof b, "%.2f GB", bytes / (1024.0 * 1024 * 1024));
+    return b;
+}
+// "2026-11-02" from an ISO time ("" when it isn't one)
+std::string day_of(const std::string &iso)
+{
+    if (iso.size() < 10) return "";
+    for (int i = 0; i < 10; i++)
+        if (i == 4 || i == 7 ? iso[i] != '-' : (iso[i] < '0' || iso[i] > '9')) return "";
+    return iso.substr(0, 10);
+}
+// cut to max bytes without splitting a UTF-8 character
+std::string cut_utf8(const std::string &s, size_t max)
+{
+    if (s.size() <= max) return s;
+    size_t n = max;
+    while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    return s.substr(0, n) + kEllipsis;
+}
+bool tagged_cogbox(const NexusMod &m)
+{
+    for (const std::string &t : m.tags) if (lower(t) == "cogbox") return true;
+    return false;
+}
+std::string file_kind(const std::string &c)
+{
+    if (c == "MAIN") return tr("Main file");
+    if (c == "UPDATE") return tr("Update");
+    if (c == "OPTIONAL") return tr("Optional");
+    if (c == "OLD_VERSION") return tr("Old version");
+    if (c == "MISCELLANEOUS") return tr("Miscellaneous");
+    return lower(c);
+}
+int file_rank(const std::string &c)
+{
+    if (c == "MAIN") return 0;
+    if (c == "UPDATE") return 1;
+    if (c == "OPTIONAL") return 2;
+    if (c == "MISCELLANEOUS") return 3;
+    if (c == "OLD_VERSION") return 5;
+    return 4;
+}
+float pill_w(const std::string &t) { return F_SMALL->CalcTextSizeA(FS(F_SMALL) * 0.9f, FLT_MAX, 0, t.c_str()).x + S(16); }
+// a picture filling [p0, p1] (cropped to keep its shape), or a plain plate
+void picture_box(ImDrawList *dl, SDL_Texture *t, int w, int h, ImVec2 p0, ImVec2 p1, float round, ImDrawFlags corners, bool cover)
+{
+    if (!t || w <= 0 || h <= 0) {
+        dl->AddRectFilled(p0, p1, U(hexc(0x202328)), round, corners);
+        return;
+    }
+    const float bw = p1.x - p0.x, bh = p1.y - p0.y, ra = bw / bh, ia = (float)w / (float)h;
+    ImVec2 uv0(0, 0), uv1(1, 1), q0 = p0, q1 = p1;
+    if (cover) {
+        if (ia > ra) { const float c = (1 - ra / ia) * 0.5f; uv0.x = c; uv1.x = 1 - c; }
+        else { const float c = (1 - ia / ra) * 0.5f; uv0.y = c; uv1.y = 1 - c; }
+    } else {   // contain: the whole picture, centred
+        dl->AddRectFilled(p0, p1, U(hexc(0x101215)), round, corners);
+        if (ia > ra) { const float hh = bw / ia; q0.y = p0.y + (bh - hh) * 0.5f; q1.y = q0.y + hh; }
+        else { const float ww = bh * ia; q0.x = p0.x + (bw - ww) * 0.5f; q1.x = q0.x + ww; }
+        round = 0;
+    }
+    dl->AddImageRounded((ImTextureID)(intptr_t)t, q0, q1, uv0, uv1, IM_COL32_WHITE, round, corners);
+}
+// wrapped plain text (the server's): never a format string
+void plain(const std::string &t, ImVec4 c, ImFont *f = nullptr)
+{
+    if (f) ImGui::PushFont(f, FS(f) * kRowText);
+    ImGui::PushStyleColor(ImGuiCol_Text, c);
+    ImGui::PushTextWrapPos(ui_row_x1() - ImGui::GetWindowPos().x + ImGui::GetScrollX());
+    ImGui::TextUnformatted(t.c_str(), t.c_str() + t.size());
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    if (f) ImGui::PopFont();
+}
+
+// a Nexus job's Choose the file... (the zip the player downloaded is that file)
+void choose_for_job(App &a, const FabJob &j)
+{
+    const std::string zip = pick_file(L"Choose the mod's .zip you downloaded from Nexus Mods", kZipFilter);
+    if (zip.empty()) return;
+    NexusMod m;
+    m.mod_id = j.nexus.mod_id;
+    m.domain = j.nexus.game_domain;
+    m.name = j.name;
+    NexusFile f;
+    f.file_id = j.nexus.file_id;
+    fab_nexus_choose_file(a, j.want_game, m, f, zip);
+}
+
+std::shared_ptr<FabJob> job_for_file(const std::string &domain, int64_t mod_id, int64_t file_id)
+{
+    for (const auto &j : fab_jobs())
+        if (fab_job_running(*j) && j->nexus.kind == "nexus" && j->nexus.mod_id == mod_id && j->nexus.file_id == file_id &&
+            lower(j->nexus.game_domain) == lower(domain))
+            return j;
+    return nullptr;
+}
+
+// the account: Sign in / Signed in as ... / Waiting ...
+float account_w(const FabNexusAccountState &acc)
+{
+    auto tw = [](const std::string &s) { return F_BODY->CalcTextSizeA(FS(F_BODY) * kRowText, FLT_MAX, 0, s.c_str()).x; };
+    if (acc.signing_in) return tw(std::string(tr("Waiting for you to approve in your browser")) + kEllipsis) + S(12) + btn_w("Cancel");
+    if (acc.signed_in) {
+        const std::string who = acc.name.empty() ? std::string(tr("Signed in to Nexus Mods")) : trf("Signed in as {1}", { acc.name });
+        return std::min(tw(who), S(320)) + S(12) + btn_w("Sign out");
+    }
+    return btn_w(acc.available ? "Sign in with Nexus Mods" : "Sign in - coming soon");
+}
+void account_area(App &a, const FabNexusAccountState &acc)
+{
+    ImGui::PushID("nexusacct");
+    if (acc.signing_in) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, col::amber);
+        ImGui::TextUnformatted((std::string(tr("Waiting for you to approve in your browser")) + kEllipsis).c_str());
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0, S(12));
+        if (btn("Cancel")) fab_nexus_sign_in_cancel();
+        ui_tip("Stops waiting. Nothing is signed in.");
+    } else if (acc.signed_in) {
+        const std::string who = acc.name.empty() ? std::string(tr("Signed in to Nexus Mods")) : trf("Signed in as {1}", { acc.name });
+        ImGui::AlignTextToFramePadding();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const std::string f = fit(F_BODY, FS(F_BODY) * kRowText, who, S(320));
+        ImGui::PushStyleColor(ImGuiCol_Text, col::good);
+        ImGui::TextUnformatted(f.c_str());
+        ImGui::PopStyleColor();
+        (void)p;
+        ImGui::SameLine(0, S(12));
+        if (btn("Sign out", !acc.signing_out)) fab_nexus_sign_out(a);
+        ui_tip("Signs this PC out of your Nexus Mods account (the sign-in is removed from Windows' Credential Manager).");
+    } else if (acc.available) {
+        if (btn("Sign in with Nexus Mods")) fab_nexus_sign_in(a);
+        ui_tip("Opens Nexus Mods in your browser to approve COGBox. Premium members' downloads then go straight into COGBox; without Premium, you download on the mod's page and COGBox adds the file.");
+    } else {
+        btn("Sign in - coming soon", false);
+        ui_tip("Signing in to Nexus Mods isn't in this build of COGBox yet. Browsing and getting mods work without it.");
+    }
+    ImGui::PopID();
+}
+
+void store_footer()
+{
+    ImGui::Dummy(ImVec2(0, S(10)));
+    ImGui::Separator();
+    ui_note("Mods are hosted on Nexus Mods. Nexus Mods' terms apply to them.");
+}
+
+// the store's jobs: downloading, waiting for the browser's download (Choose the file...), checking, installing
+void nexus_jobs_section(App &a)
+{
+    std::vector<std::shared_ptr<FabJob>> mine;
+    for (const auto &j : fab_jobs()) if (fab_job_running(*j) && j->nexus.kind == "nexus") mine.push_back(j);
+    if (mine.empty()) return;
+    ui_section("GETTING");
+    for (const auto &j : mine) {
+        ImGui::PushID(j->id + 20000);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(j->name.c_str());
+        ImGui::SameLine(0, S(14));
+        ImGui::PushStyleColor(ImGuiCol_Text, col::amber);
+        ImGui::TextUnformatted(phase_text(*j).c_str());
+        ImGui::PopStyleColor();
+        const int ph = j->phase;
+        float right = ui_row_x1() - ImGui::GetWindowPos().x + ImGui::GetScrollX();
+        if (fab_can_cancel(*j)) {
+            right -= btn_w("Cancel");
+            ImGui::SameLine(right);
+            if (btn("Cancel")) fab_cancel(j);
+            right -= S(8);
+        }
+        if (ph == FabJob::Pickup) {
+            const std::string lab = std::string(tr("Choose the file")) + kEllipsis;
+            right -= btn_w(lab.c_str());
+            ImGui::SameLine(right);
+            if (btn(lab.c_str())) choose_for_job(a, *j);
+            ui_tip("The .zip you downloaded from this mod's Files tab on Nexus Mods.");
+        }
+        if (ph == FabJob::Downloading) {
+            const int64_t total = j->progress.total, done = j->progress.done;
+            const ImVec2 q = ImGui::GetCursorScreenPos();
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            const float x1 = ui_row_x1();
+            dl->AddRectFilled(ImVec2(q.x, q.y), ImVec2(x1, q.y + S(6)), U(col::faint, 0.5f), S(3));
+            if (total > 0) dl->AddRectFilled(ImVec2(q.x, q.y), ImVec2(q.x + (x1 - q.x) * (float)std::min<int64_t>(total, done) / (float)total, q.y + S(6)), U(col::amber), S(3));
+            ImGui::Dummy(ImVec2(0, S(8)));
+        }
+        if (ph == FabJob::Pickup) {
+            if (j->pickup_manual) ui_note(std::string(tr("Download it on Nexus Mods, then choose the file")) + kEllipsis, col::text);
+            else ui_note(std::string(tr("Download it on Nexus Mods - COGBox will add it when the download finishes. Or choose the file")) + kEllipsis, col::text);
+            if (btn("Open the download page")) open_nexus(j->nexus.game_domain, j->nexus.mod_id, j->nexus.file_id);
+            ui_tip("Opens the file on Nexus Mods in your browser again.");
+        }
+        ImGui::PopID();
+    }
+}
+
+// one mod's card in the grid; true when it was clicked
+bool mod_card(App &a, const NexusMod &m, int idx, float cw, float ch, float th)
+{
+    ImGui::PushID(idx);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + cw, p0.y + ch);
+    const bool clicked = ImGui::InvisibleButton("##card", ImVec2(cw, ch));
+    const bool lit = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    const bool visible = ImGui::IsItemVisible();
+    dl->AddRectFilled(p0, p1, U(hexc(0x16181b), 0.85f), S(6));
+    const ImVec2 i0(p0.x + S(1), p0.y + S(1)), i1(p1.x - S(1), p0.y + th);
+    int w = 0, h = 0;
+    SDL_Texture *t = nullptr;
+    if (visible && !m.adult) t = fab_store_picture(a, !m.thumbnail.empty() ? m.thumbnail : m.picture, &w, &h);   // (never for adult mods)
+    picture_box(dl, t, w, h, i0, i1, S(6), ImDrawFlags_RoundCornersTop, true);
+    if (tagged_cogbox(m)) pill(dl, ImVec2(i1.x - pill_w("COGBox") - S(8), i0.y + S(8)), "COGBox", 1);
+    dl->AddRect(p0, p1, U(lit ? col::redHi : hexc(0x2f3338)), S(6), 0, lit ? S(2) : S(1));
+    const float x = p0.x + S(12), tw = cw - S(24);
+    float y = p0.y + th + S(8);
+    const float nfs = FS(F_BOLD) * 0.95f, sfs = FS(F_SMALL) * 0.95f;
+    dl->AddText(F_BOLD, nfs, ImVec2(x, y), U(col::text), fit(F_BOLD, nfs, m.name.empty() ? std::string("?") : m.name, tw).c_str());
+    y += nfs + S(4);
+    std::string by = m.author.empty() ? m.uploader : m.author;
+    std::string line = by.empty() ? std::string() : trf("by {1}", { by });
+    if (!m.version.empty()) line += (line.empty() ? "" : "   ") + std::string(tr("Version")) + " " + m.version;
+    dl->AddText(F_SMALL, sfs, ImVec2(x, y), U(col::dim), fit(F_SMALL, sfs, line, tw).c_str());
+    y += sfs + S(3);
+    const std::string stats = trf("{1} endorsements", { compact(m.endorsements) }) + "   " + trf("{1} downloads", { compact(m.downloads) });
+    dl->AddText(F_SMALL, sfs, ImVec2(x, y), U(col::dim), fit(F_SMALL, sfs, stats, tw).c_str());
+    y += sfs + S(3);
+    const std::string day = day_of(m.updated_at);
+    if (!day.empty()) dl->AddText(F_SMALL, sfs, ImVec2(x, y), U(col::faint), fit(F_SMALL, sfs, trf("Updated {1}", { day }), tw).c_str());
+    ImGui::PopID();
+    return clicked;
+}
+
+void store_grid(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
+{
+    int &dec = g_st.cogDefault.emplace(sg.domain, -1).first->second;
+    NexusQuery q;
+    q.domain = sg.domain;
+    q.text = g_st.searchSent;
+    q.sort = kSortKeys[g_st.sort];
+    q.cogbox_only = g_st.cogbox;
+    q.allow_adult = acc.allow_adult;
+    q.offset = g_st.offset;
+    q.count = kPerPage;
+    const FabStoreList L = fab_store_list(a, q);
+    // "Made for COGBox" starts on when the game has a tagged mod (the first answer, asked with it on, says)
+    if (dec < 0 && L.answered && L.q.cogbox_only && L.q.text.empty() && L.q.offset == 0 && L.q.domain == sg.domain) {
+        dec = L.total > 0 ? 1 : 0;
+        if (!dec) { g_st.cogbox = false; return; }   // (asked again without the tag next frame)
+    }
+    if (dec == 0 && !g_st.cogbox)
+        ui_note(trf("No {1} mods on Nexus Mods have the COGBox tag yet. Making one? Add the COGBox tag to its page so players find it here.", { game_def(sg.g).shortName }));
+    ImGui::Dummy(ImVec2(0, S(4)));
+    if (L.loading || (!L.answered && L.problem.empty())) { ui_note(std::string(tr("Loading mods from Nexus Mods")) + kEllipsis); return; }
+    if (!L.problem.empty()) {
+        plain(L.problem, col::bad);
+        if (btn("Try again")) fab_store_forget_failures();
+        return;
+    }
+    std::vector<const NexusMod *> shown;
+    for (const NexusMod &m : L.mods) if (!m.adult || acc.allow_adult) shown.push_back(&m);
+    if (shown.empty()) {
+        if (!q.text.empty()) ui_note(trf("No mods match \"{1}\".", { q.text }));
+        else ui_note("No mods here yet.");
+        return;
+    }
+    const float W = ui_row_x1() - ImGui::GetCursorScreenPos().x, gap = S(14), minW = T(250);
+    const int cols = std::max(1, (int)((W + gap) / (minW + gap)));
+    const float cw = std::floor((W - gap * (cols - 1)) / cols), th = std::floor(cw * 0.5f);
+    const float ch = th + S(20) + FS(F_BOLD) * 0.95f + 3 * (FS(F_SMALL) * 0.95f + S(3));
+    for (size_t i = 0; i < shown.size(); i++) {
+        if (i % cols) ImGui::SameLine(0, gap);
+        else if (i) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+        if (mod_card(a, *shown[i], (int)i, cw, ch, th)) {
+            g_st.page = true;
+            g_st.mod = *shown[i];
+            ImGui::SetScrollY(0);
+        }
+    }
+    // the pages
+    const int pages = (L.total + kPerPage - 1) / kPerPage, at = g_st.offset / kPerPage + 1;
+    ImGui::Dummy(ImVec2(0, S(8)));
+    if (pages > 1) {
+        if (btn("Previous", g_st.offset > 0)) { g_st.offset = std::max(0, g_st.offset - kPerPage); ImGui::SetScrollY(0); }
+        ImGui::SameLine(0, S(12));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(trf("Page {1} of {2}", { std::to_string(at), std::to_string(pages) }).c_str());
+        ImGui::SameLine(0, S(12));
+        if (btn("Next", at < pages)) { g_st.offset += kPerPage; ImGui::SetScrollY(0); }
+        ImGui::SameLine(0, S(16));
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, col::dim);
+    ImGui::TextUnformatted(L.total == 1 ? tr("1 mod") : trf("{1} mods", { std::to_string(L.total) }).c_str());
+    ImGui::PopStyleColor();
+}
+
+void mod_page(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
+{
+    if (btn("Back to the mods")) { g_st.page = false; return; }
+    const FabStorePage P = fab_store_page(a, sg.domain, sg.game_id, g_st.mod.mod_id);
+    const NexusMod &m = P.answered ? P.mod : g_st.mod;   // (the card's fields until the page is there)
+    if (m.adult && !acc.allow_adult) { ui_note("This mod isn't shown in COGBox."); return; }
+    ImGui::Dummy(ImVec2(0, S(6)));
+    // the picture (none for adult mods), and beside it what the mod is
+    const float x0 = ImGui::GetCursorScreenPos().x, W = ui_row_x1() - x0;
+    const float pw = std::floor(std::min(W * 0.42f, S(600))), ph = std::floor(pw * 9 / 16);
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        int w = 0, h = 0;
+        SDL_Texture *t = m.adult ? nullptr : fab_store_picture(a, !m.picture.empty() ? m.picture : m.thumbnail, &w, &h);
+        picture_box(ImGui::GetWindowDrawList(), t, w, h, p, ImVec2(p.x + pw, p.y + ph), S(6), ImDrawFlags_RoundCornersAll, false);
+        ImGui::Dummy(ImVec2(pw, ph));
+    }
+    ImGui::SameLine(0, S(20));
+    ImGui::BeginGroup();
+    {
+        ImGui::PushFont(F_HEAD, FS(F_HEAD));
+        ImGui::PushTextWrapPos(ui_row_x1() - ImGui::GetWindowPos().x + ImGui::GetScrollX());
+        ImGui::TextUnformatted(m.name.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopFont();
+        const std::string by = m.author.empty() ? m.uploader : m.author;
+        std::string line = by.empty() ? std::string() : trf("by {1}", { by });
+        if (!m.version.empty()) line += (line.empty() ? "" : "   ") + std::string(tr("Version")) + " " + m.version;
+        if (!line.empty()) plain(line, col::dim);
+        std::string stats = trf("{1} endorsements", { compact(m.endorsements) }) + "   " + trf("{1} downloads", { compact(m.downloads) });
+        const std::string day = day_of(m.updated_at);
+        if (!day.empty()) stats += "   " + trf("Updated {1}", { day });
+        plain(stats, col::dim);
+        if (!m.category.empty()) plain(trf("Category: {1}", { m.category }), col::dim);
+        // the tags, as pills that wrap
+        if (!m.tags.empty()) {
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float right = ui_row_x1(), rowH = FS(F_SMALL) * 0.9f + S(10);
+            float x = p.x, y = p.y;
+            for (size_t i = 0; i < m.tags.size() && i < 24; i++) {
+                const float tw = pill_w(m.tags[i]);
+                if (x > p.x && x + tw > right) { x = p.x; y += rowH; }
+                pill(dl, ImVec2(x, y), m.tags[i], lower(m.tags[i]) == "cogbox" ? 1 : 0);
+                x += tw + S(6);
+            }
+            ImGui::Dummy(ImVec2(std::max(S(1), right - p.x), y - p.y + rowH));
+        }
+        if (!m.summary.empty()) { ImGui::Dummy(ImVec2(0, S(2))); plain(m.summary, col::text); }
+        ImGui::Dummy(ImVec2(0, S(4)));
+        if (btn("View on Nexus Mods")) open_nexus(sg.domain, m.mod_id);
+        ui_tip("Opens the mod's page on Nexus Mods in your browser.");
+    }
+    ImGui::EndGroup();
+
+    nexus_jobs_section(a);
+    ui_section("FILES");
+    if (P.loading) ui_note(std::string(tr("Loading the files")) + kEllipsis);
+    else if (!P.problem.empty()) {
+        plain(P.problem, col::bad);
+        if (btn("Try again")) fab_store_forget_failures();
+    } else if (P.answered && !P.files_ok) {
+        ui_note("Nexus Mods didn't list the files.", col::bad);
+        if (btn("Try again")) fab_store_forget_failures();
+    } else if (P.answered) {
+        std::vector<const NexusFile *> files;
+        for (const NexusFile &f : P.files)
+            if (f.category != "ARCHIVED" && f.category != "DELETED" && f.category != "REMOVED") files.push_back(&f);
+        std::stable_sort(files.begin(), files.end(), [](const NexusFile *x, const NexusFile *y) {
+            const int rx = file_rank(x->category), ry = file_rank(y->category);
+            return rx != ry ? rx < ry : x->uploaded_at > y->uploaded_at;
+        });
+        if (files.empty()) ui_note("This mod has no files to get.");
+        for (size_t i = 0; i < files.size() && i < 200; i++) {
+            const NexusFile &f = *files[i];
+            ImGui::PushID((int)i + 30000);
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            const ImVec2 r0 = ImGui::GetCursorScreenPos();
+            const float rw = ui_row_x1() - r0.x, rh = T(54);
+            const ImVec2 r1(r0.x + rw, r0.y + rh);
+            dl->AddRectFilled(r0, r1, U(hexc(0x16181b), 0.8f), S(4));
+            dl->AddRect(r0, r1, U(hexc(0x2f3338)), S(4));
+            const auto job = job_for_file(sg.domain, m.mod_id, f.file_id);
+            const float bw = btn_w("Get");
+            const float textW = rw - bw - S(40);
+            const float nfs = FS(F_BOLD) * 0.95f, sfs = FS(F_SMALL) * 0.95f;
+            dl->AddText(F_BOLD, nfs, ImVec2(r0.x + S(12), r0.y + S(7)), U(f.category == "OLD_VERSION" ? col::dim : col::text),
+                        fit(F_BOLD, nfs, f.name.empty() ? std::string("?") : f.name, textW).c_str());
+            std::string sub = file_kind(f.category);
+            if (!f.version.empty()) sub += "   " + std::string(tr("Version")) + " " + f.version;
+            const std::string sz = size_text(f.size_bytes), day = day_of(f.uploaded_at);
+            if (!sz.empty()) sub += "   " + sz;
+            if (!day.empty()) sub += "   " + day;
+            if (job) sub += "   " + phase_text(*job);
+            dl->AddText(F_SMALL, sfs, ImVec2(r0.x + S(12), r0.y + S(11) + nfs), U(job ? col::amber : col::dim), fit(F_SMALL, sfs, sub, textW).c_str());
+            ImGui::SetCursorScreenPos(ImVec2(r1.x - S(10) - bw, r0.y + (rh - T(26)) * 0.5f));
+            if (btn("Get", !job && !a.run.proc)) fab_nexus_get(a, sg.g, m, f);
+            ui_tip(a.run.proc ? "Close the game first." : job ? "This file is being added." :
+                   "Premium members' downloads come straight into COGBox. Otherwise the file's page opens on Nexus Mods: download it there and COGBox adds it from your Downloads folder.");
+            if (!f.description.empty() && ImGui::IsMouseHoveringRect(r0, ImVec2(r1.x - bw - S(20), r1.y))) {
+                ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(S(460), FLT_MAX));
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(S(440));
+                const std::string d = cut_utf8(f.description, 1024);
+                ImGui::TextUnformatted(d.c_str(), d.c_str() + d.size());
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+            ImGui::SetCursorScreenPos(r0);
+            ImGui::Dummy(ImVec2(rw, rh));
+            ImGui::Dummy(ImVec2(0, S(2)));
+            ImGui::PopID();
+        }
+        ui_note("Only .zip files can be added to COGBox.");
+    } else ui_note(std::string(tr("Loading the files")) + kEllipsis);
+
+    ui_section("DESCRIPTION");
+    if (!P.answered) ui_note(std::string(tr("Loading")) + kEllipsis);
+    else if (m.description.empty()) ui_note("No description.");
+    else plain(cut_utf8(m.description, kDescriptionMax), col::text);
+}
+
+void nexus_store(App &a)
+{
+    if (!fab_store_online(a)) {   // nothing is asked for
+        ui_section("MODS FROM NEXUS MODS");
+        ui_note("Turn on Online play to browse Nexus Mods.", col::text);
+        ui_note("Online play is on a game's SOCIAL tab.");
+        store_footer();
+        return;
+    }
+    fab_store_open(a);
+    const FabStoreGames games = fab_store_games();
+    const FabNexusAccountState acc = fab_nexus_account_state();
+    const FabStoreGame *sg = nullptr;
+    for (const FabStoreGame &x : games.games) if (x.g == g_st.game) sg = &x;
+    if (!sg && !games.games.empty()) {   // the LIBRARY's game when Nexus Mods has it, else the first
+        const int want = fab_library_game(a);
+        sg = &games.games[0];
+        for (const FabStoreGame &x : games.games) if (x.g == want) sg = &x;
+        g_st.game = sg->g;
+        g_st.offset = 0;
+        g_st.page = false;
+        auto it = g_st.cogDefault.find(sg->domain);
+        g_st.cogbox = it == g_st.cogDefault.end() || it->second != 0;
+    }
+
+    // the header: game, search, sort, Made for COGBox; the account on the right
+    {
+        if (sg) {
+            int sel = 0;
+            std::vector<const char *> names;
+            for (size_t i = 0; i < games.games.size(); i++) {
+                names.push_back(tr(game_def(games.games[i].g).shortName));
+                if (&games.games[i] == sg) sel = (int)i;
+            }
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(tr("Game"));
+            ImGui::SameLine(0, S(12));
+            ImGui::SetNextItemWidth(T(160));
+            if (ImGui::Combo("##storegame", &sel, names.data(), (int)names.size()) && games.games[sel].g != g_st.game) {
+                const FabStoreGame &n = games.games[sel];
+                g_st.game = n.g;
+                g_st.offset = 0;
+                g_st.page = false;
+                auto it = g_st.cogDefault.find(n.domain);
+                g_st.cogbox = it == g_st.cogDefault.end() || it->second != 0;
+                sg = &n;
+            }
+            ImGui::SameLine(0, S(18));
+            if (input("##storesearch", g_st.search, "Search mods", T(220))) g_st.searchAt = ImGui::GetTime();
+            if (g_st.search != g_st.searchSent && ImGui::GetTime() - g_st.searchAt >= 0.4) {
+                g_st.searchSent = g_st.search;
+                g_st.offset = 0;
+                g_st.page = false;
+            }
+            ImGui::SameLine(0, S(18));
+            const char *sorts[5];
+            for (int i = 0; i < 5; i++) sorts[i] = tr(kSortNames[i]);
+            ImGui::SetNextItemWidth(T(190));
+            if (ImGui::Combo("##storesort", &g_st.sort, sorts, 5)) { g_st.offset = 0; g_st.page = false; }
+            ImGui::SameLine(0, S(18));
+            bool cog = g_st.cogbox;
+            if (ImGui::Checkbox(tr("Made for COGBox"), &cog)) {
+                g_st.cogbox = cog;
+                g_st.cogDefault[sg->domain] = cog ? 1 : 0;   // (the player's choice from now on)
+                g_st.offset = 0;
+                g_st.page = false;
+            }
+            ui_tip("Only mods with the COGBox tag on Nexus Mods: made for COGBox, as a .zip with a mod.ini.");
+        }
+        const float aw = account_w(acc), ax = ui_row_x1() - aw;
+        if (sg && ImGui::GetItemRectMax().x + S(24) < ax) ImGui::SameLine(ax - ImGui::GetWindowPos().x + ImGui::GetScrollX());
+        account_area(a, acc);
+        if (!acc.problem.empty()) plain(acc.problem, col::amber);
+    }
+
+    if (!sg) {
+        ImGui::Dummy(ImVec2(0, S(8)));
+        if (games.looking || !games.done) ui_note(std::string(tr("Looking for the Gears games on Nexus Mods")) + kEllipsis);
+        else {
+            if (!games.problem.empty()) plain(games.problem, col::bad);
+            else ui_note("Nexus Mods has none of the Gears games COGBox knows yet.");
+            if (btn("Try again")) fab_store_games_retry();
+        }
+        store_footer();
+        return;
+    }
+    if (g_st.page) mod_page(a, *sg, acc);
+    else {
+        nexus_jobs_section(a);
+        ui_section("MODS");
+        store_grid(a, *sg, acc);
+    }
+    store_footer();
+}
+#endif  // COGBOX_FAB_NEXUS
+
 void store_tab(App &a)
 {
+#ifdef COGBOX_FAB_NEXUS
+    nexus_store(a);
+#else
     ui_section("MODS FROM NEXUS MODS - COMING SOON");
     ui_note("Soon you'll browse and get mods for every Gears game from Nexus Mods here. Until then, add a mod you downloaded with Add a mod on the LIBRARY tab.", col::text);
     ImGui::Dummy(ImVec2(0, S(8)));
     ui_note("Making a mod? Publish it on Nexus Mods with the COGBox tag so players can find it.");
-#ifdef COGBOX_FAB_NEXUS
-    ui_section("CHECK FOR UPDATES");
-    ImGui::Dummy(ImVec2(0, S(40)));
-#endif
     (void)a;
+#endif
 }
 
 // ---- CREATOR ----------------------------------------------------------------------------------------------------------
