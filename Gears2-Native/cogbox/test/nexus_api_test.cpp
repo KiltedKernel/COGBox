@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <chrono>
 #include <thread>
 
 using json = nlohmann::json;
@@ -78,6 +79,21 @@ static void test_gql_mods_filter()
     }
 
     // the other builders: valid JSON with their query and variables
+    // invalid UTF-8 in the player's text: a body all the same (no throw), still JSON
+    q.text = std::string("bad \xC3\x28 \xFF\xFE text");
+    std::string bad_body;
+    try {
+        bad_body = nexus_gql_mods(q);
+    } catch (...) {
+        CHECK(!"nexus_gql_mods threw on invalid UTF-8");
+    }
+    CHECK(!bad_body.empty() && json::parse(bad_body, nullptr, false).is_object());
+    try {
+        CHECK(json::parse(nexus_gql_game("gears\xFF"), nullptr, false).is_object());
+    } catch (...) {
+        CHECK(!"nexus_gql_game threw on invalid UTF-8");
+    }
+
     j = json::parse(nexus_gql_mod(27, 3590), nullptr, false);
     CHECK(j.is_object() && contains(j["query"].get<std::string>(), "mod(") && j["variables"]["modId"] == "27" && j["variables"]["gameId"] == "3590");
     j = json::parse(nexus_gql_files(27, 3590), nullptr, false);
@@ -173,6 +189,32 @@ static void test_hostile()
     CHECK(nexus_plain_text("&#0;&#xD800;&#1114112;ok", 100) == "ok");
     CHECK(nexus_plain_text("", 10).empty());
 
+    // review fix: hostile repetition stays linear (each case well under 100 ms)
+    auto timed = [](const std::string &in, size_t max) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const std::string out = nexus_plain_text(in, max);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        return std::make_pair(out, ms);
+    };
+    std::string rep_img, rep_amp, rep_attr, rep_yt;
+    for (int k = 0; k < 40000; k++) rep_img += "[img]";      // 200 KB of unclosed [img]
+    for (int k = 0; k < 200000; k++) rep_amp += "&";         // no ';' anywhere
+    for (int k = 0; k < 66000; k++) rep_attr += "[b=";       // BBCode attributes never closed
+    for (int k = 0; k < 20000; k++) rep_yt += "[youtube]x";
+    for (const std::string *in : { &rep_img, &rep_amp, &rep_attr, &rep_yt }) {
+        auto r = timed(*in, 32 * 1024);
+        if (r.second >= 100) printf("  plain text took %.1f ms on %zu bytes\n", r.second, in->size());
+        CHECK(r.second < 100);
+        CHECK(r.first.size() <= 32 * 1024);
+    }
+    {
+        auto r = timed(rep_img, 64);   // a small cap reads little of a large input
+        CHECK(r.second < 100 && r.first.size() <= 64);
+        std::string many(4u << 20, 'a');   // 4 MiB of text, a 1 KiB cap
+        r = timed(many, 1024);
+        CHECK(r.second < 100 && r.first.size() == 1024);
+    }
+
     // huge numbers clamp, negative ones are 0; non-https and foreign pictures are dropped; descriptions become plain text
     const std::string body = std::string(R"({"data":{"mods":{"totalCount":1e300,"nodes":[{"modId":99999999999999999999999,"gameId":123456789012,)") +
                              R"("endorsements":-5,"downloads":1.5e30,"name":"<i>N</i>","summary":"[b]S[/b] &amp; more",)" +
@@ -257,6 +299,10 @@ static void test_allowlist()
     CHECK(!nexus_host_allowed("https://"));
     CHECK(!nexus_host_allowed("ftp://api.nexusmods.com/"));
     CHECK(!nexus_host_allowed("https://127.0.0.1/"));
+    CHECK(!nexus_host_allowed("https://api.nexusmods.com./v2/graphql"));   // a trailing dot: refused
+    CHECK(!nexus_host_allowed("https://staticdelivery.nexusmods.com./x.png"));
+    CHECK(!nexus_host_allowed("https://.nexusmods.com/"));
+    CHECK(!nexus_host_allowed("https://a..nexusmods.com/"));
     // refused before any connection, and the error names no address
     nexus_set_test_base("");
     NexusResponse r = nexus_request("GET", "https://evil.com/x", "", {});
@@ -286,6 +332,7 @@ struct Loopback {
     int port = 0;
     std::string request;
     std::thread th;
+    int drip_ms = 0;   // > 0: the body after the headers goes out one byte per drip_ms
     bool start(const std::string &answer)
     {
         ls = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -298,6 +345,7 @@ struct Loopback {
         getsockname(ls, (sockaddr *)&a, &len);
         port = ntohs(a.sin_port);
         th = std::thread([this, answer] {
+            const size_t head_end = answer.find("\r\n\r\n") + 4;
             SOCKET c = accept(ls, nullptr, nullptr);
             if (c == INVALID_SOCKET) return;
             char buf[8192];
@@ -315,7 +363,10 @@ struct Loopback {
             }
             size_t at = 0;
             while (at < answer.size()) {
-                int n = send(c, answer.data() + at, (int)std::min<size_t>(answer.size() - at, 1 << 16), 0);
+                size_t chunk = std::min<size_t>(answer.size() - at, 1 << 16);
+                if (drip_ms > 0 && at >= head_end) { chunk = 1; Sleep(drip_ms); }
+                else if (drip_ms > 0) chunk = head_end - at;
+                int n = send(c, answer.data() + at, (int)chunk, 0);
                 if (n <= 0) break;
                 at += n;
             }
@@ -371,6 +422,30 @@ static void test_transport()
         NexusResponse r = nexus_request("GET", "https://api.nexusmods.com/v1/x.json", "", {}, 5000);
         lb.stop();
         CHECK(r.status == 302);
+    }
+    {
+        // a dripping answer is cut off at timeout_ms for the whole request, not per read
+        Loopback lb;
+        lb.drip_ms = 100;
+        CHECK(lb.start("HTTP/1.1 200 OK\r\nContent-Length: 40\r\nConnection: close\r\n\r\n" + std::string(40, 'a')));
+        nexus_set_test_base("http://127.0.0.1:" + std::to_string(lb.port));
+        const auto t0 = std::chrono::steady_clock::now();
+        NexusResponse r = nexus_request("GET", "https://api.nexusmods.com/v1/x.json", "", {}, 1000);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        lb.stop();
+        CHECK(r.status == 0 && !r.error.empty() && r.body.empty());
+        CHECK(ms < 1800);
+    }
+    {
+        // the caller can't replace the app headers
+        Loopback lb;
+        CHECK(lb.start("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"));
+        nexus_set_test_base("http://127.0.0.1:" + std::to_string(lb.port));
+        NexusResponse r = nexus_request("GET", "https://api.nexusmods.com/v1/x.json", "",
+                                        { { "Application-Name", "Other" }, { "application-version", "9" } }, 5000);
+        lb.stop();
+        CHECK(r.status == 200);
+        CHECK(contains(lb.request, "Application-Name: COGBox\r\n") && !contains(lb.request, "Other") && !contains(lb.request, ": 9\r\n"));
     }
     nexus_set_test_base("");
     WSACleanup();

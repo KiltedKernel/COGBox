@@ -168,7 +168,7 @@ NexusMod mod_from(const json &n)
 std::string gql_body(const std::string &query, json variables)
 {
     json j = { { "query", query }, { "variables", std::move(variables) } };
-    return j.dump();
+    return j.dump(-1, ' ', false, json::error_handler_t::replace);   // (invalid UTF-8 from the player: U+FFFD, never a throw)
 }
 
 // The player's search text: no control characters, at most 200 bytes (not splitting a UTF-8 character).
@@ -381,8 +381,15 @@ std::string nexus_mod_url(const std::string &domain, int64_t mod_id, int64_t fil
     return u;
 }
 
-std::string nexus_plain_text(const std::string &in, size_t max_bytes)
+std::string nexus_plain_text(const std::string &whole, size_t max_bytes)
 {
+    // Review fix: only the first few multiples of max_bytes are read (markup can be most of a description, but never
+    // that much), so a huge hostile description costs no more than a sane one.
+    const size_t limit = max_bytes > ((size_t)1 << 28) ? ((size_t)1 << 31) : max_bytes * 8 + 4096;
+    std::string head;
+    if (whole.size() > limit) head = whole.substr(0, limit);
+    const std::string &in = whole.size() > limit ? head : whole;
+    bool no_img_end = false, no_youtube_end = false;   // an unclosed [img] / [youtube] is searched for once only
     std::string out;
     int newlines = 0;     // line breaks waiting to be written (at most 2: one empty line)
     bool space = false;   // a space waiting
@@ -437,12 +444,14 @@ std::string nexus_plain_text(const std::string &in, size_t max_bytes)
             while (k < n && (alnum(in[k]) || in[k] == '*') && name.size() < 12) name += (char)tolower((unsigned char)in[k++]);
             if (!name.empty() && k < n && (in[k] == ']' || in[k] == '=' || in[k] == ' ') && is_bbcode(name)) {
                 size_t e = k;
-                while (e < n && e - k < 2048 && in[e] != ']' && in[e] != '\n') e++;
+                while (e < n && e - k < 2048 && in[e] != ']' && in[e] != '\n' && in[e] != '[') e++;   // ('[': stays linear)
                 if (e < n && in[e] == ']') {
                     i = e + 1;
                     if (!closing && (name == "img" || name == "youtube")) {   // their content is an address, not text
-                        const size_t end = ifind(in, name == "img" ? "[/img]" : "[/youtube]", i);
+                        bool &none = name == "img" ? no_img_end : no_youtube_end;
+                        const size_t end = none ? std::string::npos : ifind(in, name == "img" ? "[/img]" : "[/youtube]", i);
                         if (end != std::string::npos) i = end + (name == "img" ? 6 : 10);
+                        else none = true;
                         continue;
                     }
                     if (name == "line" || name == "hr" || name == "*" || name == "li" || (closing && (name == "quote" || name == "list")))
@@ -455,8 +464,9 @@ std::string nexus_plain_text(const std::string &in, size_t max_bytes)
             continue;
         }
         if (c == '&') {
-            const size_t semi = in.find(';', i + 1);
-            if (semi != std::string::npos && semi - i <= 10) {
+            size_t semi = i + 1;   // (looked for in the next 10 bytes only: a run of '&' stays linear)
+            while (semi < n && semi - i <= 10 && in[semi] != ';') semi++;
+            if (semi < n && in[semi] == ';' && semi - i <= 10) {
                 const std::string ent = in.substr(i + 1, semi - i - 1);
                 std::string rep;
                 bool known = true;

@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -139,11 +140,14 @@ NexusResponse nexus_request(const std::string &method, const std::string &url, c
             res.error = "Bad request header.";
             return res;
         }
+        if (_stricmp(h.first.c_str(), "Application-Name") == 0 || _stricmp(h.first.c_str(), "Application-Version") == 0) continue;   // (ours only)
         if (_stricmp(h.first.c_str(), "Content-Type") == 0) has_type = true;
         hdr += wide_of(h.first) + L": " + wide_of(h.second) + L"\r\n";
     }
     if (!body.empty() && !has_type) hdr += L"Content-Type: application/json\r\n";
     if (timeout_ms < 1000) timeout_ms = 1000;
+    // timeout_ms is the whole request's time, not each step's: a server that drips its answer is cut off at it too.
+    const ULONGLONG deadline = GetTickCount64() + (ULONGLONG)timeout_ms;
 
     static const std::wstring agent = L"COGBox/" + wide_of(NEXUS_APP_VERSION);
     HINTERNET s = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -174,9 +178,20 @@ NexusResponse nexus_request(const std::string &method, const std::string &url, c
             res.status = (int)status;
             std::string buf(1 << 16, '\0');
             for (;;) {
-                DWORD got = 0;
-                if (!WinHttpReadData(r, buf.data(), (DWORD)buf.size(), &got)) {
-                    res.error = "The answer from Nexus Mods was cut off.";
+                const ULONGLONG now = GetTickCount64();
+                if (now >= deadline) {
+                    res.error = "Nexus Mods did not answer in time.";
+                    res.body.clear();
+                    break;
+                }
+                DWORD left = (DWORD)(deadline - now);   // (a read waits no longer than what is left)
+                WinHttpSetOption(r, WINHTTP_OPTION_RECEIVE_TIMEOUT, &left, sizeof left);
+                // (what is there only: a synchronous read of a full buffer would wait for all of it, past the deadline)
+                DWORD avail = 0, got = 0;
+                const bool ok = WinHttpQueryDataAvailable(r, &avail) &&
+                                (avail == 0 || WinHttpReadData(r, buf.data(), (DWORD)std::min<size_t>(avail, buf.size()), &got));
+                if (!ok) {
+                    res.error = GetLastError() == ERROR_WINHTTP_TIMEOUT ? "Nexus Mods did not answer in time." : "The answer from Nexus Mods was cut off.";
                     res.body.clear();
                     break;
                 }
