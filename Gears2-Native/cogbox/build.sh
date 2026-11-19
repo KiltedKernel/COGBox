@@ -29,7 +29,17 @@ $VER
 X
 printf '#define VERSION_RC %s,%s,%s,0\n#define VERSION_STR "%s"\n' "$A" "$B" "${C:-0}" "$VER" > res/version_rc.h
 x86_64-w64-mingw32-windres -I res res/cogbox.rc -O coff -o $OUT/obj/cogbox.res.o
-FLAGS="$OPT -std=c++17 -Wall -Wextra -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -Ithird_party/imgui -I$SDL/include -Ithird_party -Isrc -I../src/layer2_ue3/include -I../src/layer0_xenos/include -I../../Gears3-Native/src/layer2_ue3 $FFDEF"
+# The Fabricator's Nexus Mods browsing and downloads (src/nexus_*.cpp) build only with COGBOX_FAB_NEXUS=1; without it the
+# launcher is the local Fabricator, unchanged. COGBOX_NEXUS_CLIENT_ID (the OAuth client ID Nexus Mods issues) is built in
+# when set (letters, digits, . _ - only).
+NEXUS=""
+if [ "$COGBOX_FAB_NEXUS" = 1 ]; then NEXUS="-DCOGBOX_FAB_NEXUS"
+  if [ -n "$COGBOX_NEXUS_CLIENT_ID" ]; then
+    case "$COGBOX_NEXUS_CLIENT_ID" in *[!A-Za-z0-9._-]*) echo "build.sh: COGBOX_NEXUS_CLIENT_ID may hold only letters, digits, . _ -" >&2; exit 1;; esac
+    NEXUS="$NEXUS -DCOGBOX_NEXUS_CLIENT_ID=\"$COGBOX_NEXUS_CLIENT_ID\""
+  fi
+fi
+FLAGS="$OPT -std=c++17 -Wall -Wextra -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -Ithird_party/imgui -I$SDL/include -Ithird_party -Isrc -I../src/layer2_ue3/include -I../src/layer0_xenos/include -I../../Gears3-Native/src/layer2_ue3 $FFDEF $NEXUS"
 objs=""
 for f in third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp \
          third_party/imgui/imgui_impl_sdl3.cpp third_party/imgui/imgui_impl_sdlrenderer3.cpp; do
@@ -45,6 +55,7 @@ for f in third_party/lzma/*.c; do
 done
 for f in src/*.cpp ../src/layer2_ue3/prebuild_lzx.cpp ../src/layer0_xenos/achievements_data.cpp ../../Gears3-Native/src/layer2_ue3/modcore/modcore.cpp \
          ../src/layer0_xenos/achievements_browser_model.cpp ../src/layer0_xenos/achievements_popup_logic.cpp; do   # (the LZX decoder: Gears2-Native's own, MIT)
+  case $f in src/nexus_*) [ -n "$NEXUS" ] || continue;; esac   # (Nexus Mods: COGBOX_FAB_NEXUS builds only)
   o=$OUT/obj/$(basename $f .cpp).o; objs="$objs $o"
   $CXX $FLAGS -c $f -o $o
 done
