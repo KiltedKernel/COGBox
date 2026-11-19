@@ -255,8 +255,9 @@ std::atomic<bool> g_online{false};
 
 // the Nexus Mods game id of each domain that was looked up and found (the store's lookup and the update check share
 // it; a failed or odd answer is not kept, so it is asked again next time)
-std::mutex g_gameIdMu;
-std::map<std::string, int> g_gameIds;
+// (heap, never freed, like worker(): the threads may still use them while the process exits)
+std::mutex &g_gameIdMu = *new std::mutex;
+std::map<std::string, int> &g_gameIds = *new std::map<std::string, int>;
 
 bool same_nexus_file(const FabJob &j, const std::string &domain, int64_t mod_id, int64_t file_id)
 {
@@ -360,7 +361,8 @@ void pickup_poll(App &a, const std::shared_ptr<FabJob> &j)
     if (!j->pickup_found.empty()) {   // "Add {file}?" asked (fab_answer); asked again when another question replaced it
         if (a.modal.open) return;
         ask(a, "fabnexusadd", j->want_game, "Add a mod", trf("Add {1}?", { base_name(j->pickup_found) }) + "\n\n" +
-            tr("It is in your Downloads folder. COGBox checks it, then adds it from there (the file stays where it is)."),
+            tr("It is in your Downloads folder. COGBox checks it, then adds it from there (the file stays where it is).") + "\n\n" +
+            tr("Source: Nexus Mods"),
             { "Add", "Cancel" }, std::to_string(j->id));
         return;
     }
@@ -388,8 +390,8 @@ struct UpdateCheck {
     FabNexusUpdates u;
     bool said = true;   // (UI) its result was said
 };
-std::mutex g_updMu;
-UpdateCheck g_upd[G_COUNT];
+std::mutex &g_updMu = *new std::mutex;             // (heap, never freed: the worker may still write at exit)
+UpdateCheck (&g_upd)[G_COUNT] = *new UpdateCheck[1][G_COUNT];
 
 struct UpdateRow {
     std::string folder, domain, version;
@@ -961,17 +963,19 @@ std::string store_problem(const NexusResponse &r)
     return "Nexus Mods could not be reached.";
 }
 
-std::mutex g_storeMu;   // what the store's threads write (below), read by the UI thread
+// What the store's threads write (below), read by the UI thread. On the heap and never freed, like worker(): a store,
+// picture, sign-in or sign-out thread may still be running while the process exits.
+std::mutex &g_storeMu = *new std::mutex;
 
 // the games lookup (once per run; Try again looks up the ones that failed)
-FabStoreGames g_games;
+FabStoreGames &g_games = *new FabStoreGames;
 bool g_gamesStarted = false;   // (UI)
 
 // the answers, 5 min
 struct ListAnswer { Uint64 at = 0; std::vector<NexusMod> mods; int total = 0; };
 struct PageAnswer { Uint64 at = 0; NexusMod mod; std::vector<NexusFile> files; };
-std::map<std::string, ListAnswer> g_lists;
-std::map<std::string, PageAnswer> g_pages;
+std::map<std::string, ListAnswer> &g_lists = *new std::map<std::string, ListAnswer>;
+std::map<std::string, PageAnswer> &g_pages = *new std::map<std::string, PageAnswer>;
 template <class M> void cache_trim(M &m)   // the old answers out, and room for one more
 {
     const Uint64 now = SDL_GetTicks();
@@ -987,10 +991,10 @@ template <class M> void cache_trim(M &m)   // the old answers out, and room for 
 }
 
 // the query and the page wanted now, and how far they are
-FabStoreList g_list;
-std::string g_listKey;
-FabStorePage g_page;
-std::string g_pageKey;
+FabStoreList &g_list = *new FabStoreList;
+std::string &g_listKey = *new std::string;
+FabStorePage &g_page = *new FabStorePage;
+std::string &g_pageKey = *new std::string;
 
 std::string list_key(const NexusQuery &q)
 {
@@ -1097,12 +1101,13 @@ struct Account {
     int missing = 0;               // reads in a row that found no tokens while signed in
     std::shared_ptr<std::atomic<bool>> cancel;   // the sign-in running
     int msg = 0;                   // said by the UI thread (store_poll): 1 signed in, 2 signed out
+    int gen = 0;                   // the account's turn: a preference asked in an earlier one is not kept
 };
-Account g_acc;
+Account &g_acc = *new Account;
 Uint64 g_accNext = 0;   // (UI) the next Credential Manager read
 
 // (store thread) the adult preference of the signed-in player
-void run_pref()
+void run_pref(int gen)
 {
     std::string problem;
     std::optional<std::string> tok = g_online ? nexus_access_token(&problem) : std::nullopt;
@@ -1114,6 +1119,7 @@ void run_pref()
     }
     const bool still = tok ? true : nexus_account().signed_in;
     std::lock_guard<std::mutex> l(g_storeMu);
+    if (gen != g_acc.gen) return;   // signed out or in again meanwhile: not this account's answer
     g_acc.adult = adult;
     if (!tok && !problem.empty()) g_acc.s.problem = problem;   // e.g. "You were signed out of Nexus Mods - sign in again."
     if (!still && !g_acc.s.signing_in) { g_acc.s.signed_in = false; g_acc.s.name.clear(); }
@@ -1134,7 +1140,7 @@ void account_tick(App &a)
         std::lock_guard<std::mutex> l(g_storeMu);
         if (!g_acc.s.signing_in && !g_acc.s.signing_out) {
             if (acc.signed_in) {
-                if (!g_acc.s.signed_in) { g_acc.adult.reset(); g_acc.pref_asked = false; }
+                if (!g_acc.s.signed_in) { g_acc.adult.reset(); g_acc.pref_asked = false; g_acc.gen++; }
                 g_acc.s.signed_in = true;
                 g_acc.s.name = acc.name;
                 g_acc.missing = 0;
@@ -1143,6 +1149,7 @@ void account_tick(App &a)
                 g_acc.s.name.clear();
                 g_acc.adult.reset();
                 g_acc.pref_asked = false;
+                g_acc.gen++;
                 g_acc.missing = 0;
                 g_acc.s.problem = "You were signed out of Nexus Mods - sign in again.";
             }
@@ -1151,7 +1158,8 @@ void account_tick(App &a)
     std::lock_guard<std::mutex> l(g_storeMu);
     if (g_acc.s.signed_in && !g_acc.s.signing_out && !g_acc.pref_asked && online_on(a)) {
         g_acc.pref_asked = true;
-        store_worker().post([] { run_pref(); });
+        const int gen = g_acc.gen;
+        store_worker().post([gen] { run_pref(gen); });
     }
 }
 
@@ -1168,8 +1176,8 @@ struct Decoded {
     int gen = 0, w = 0, h = 0;
     std::vector<unsigned char> px;   // RGBA; empty: no picture
 };
-std::mutex g_picMu;
-std::vector<Decoded> g_picDone;
+std::mutex &g_picMu = *new std::mutex;                          // (heap, never freed: see g_storeMu)
+std::vector<Decoded> &g_picDone = *new std::vector<Decoded>;
 std::atomic<int> g_picGen{0};   // the screen's opening: a picture asked for before it closed is dropped
 
 // (picture thread) WebP (what Nexus Mods' CDN sends for every picture) through Windows' own decoder (WIC): its size read
@@ -1261,6 +1269,10 @@ static void store_poll(App &a)
             set_message(a, trf("Online play is off - getting {1} from Nexus Mods stopped.", { j->name }), false);
         }
         fab_nexus_sign_in_cancel();
+    }
+    if (!g_online && on) {   // back on: the "Online play is off." answers are asked again, the pictures start over
+        fab_store_forget_failures();
+        pictures_free();
     }
     g_online = on;
     g_picFrame++;
@@ -1431,6 +1443,7 @@ void fab_nexus_sign_in(App &a)
             g_acc.s.name = acc.name;
             g_acc.adult.reset();
             g_acc.pref_asked = false;
+            g_acc.gen++;
             g_acc.missing = 0;
             g_acc.msg = 1;
         } else if (!*c) g_acc.s.problem = e;   // (Cancel pressed: nothing to say)
@@ -1459,6 +1472,7 @@ void fab_nexus_sign_out(App &a)
         g_acc.s.problem.clear();
         g_acc.adult.reset();
         g_acc.pref_asked = false;
+        g_acc.gen++;
         g_acc.missing = 0;
         g_acc.msg = 2;
     }).detach();

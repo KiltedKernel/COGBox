@@ -20,6 +20,7 @@
 #include <cmath>
 #include <functional>
 #ifdef COGBOX_FAB_NEXUS
+#include <climits>
 #include <map>
 #endif
 
@@ -438,7 +439,8 @@ struct StoreUi {
     std::string search, searchSent;       // the box, and what was sent (400 ms after typing stops)
     double searchAt = 0;
     int sort = 0;
-    std::map<std::string, int> cogDefault;   // "Made for COGBox" per domain: -1 being decided, 0 off, 1 on
+    std::map<std::string, int> cogTagged;   // per domain, what Nexus Mods said: -1 not known yet, 0 no tagged mod, 1 some
+    std::map<std::string, bool> cogChoice;  // per domain, "Made for COGBox" as the player set it (none: follows cogTagged)
     bool cogbox = true;
     int offset = 0;
     bool page = false;                    // a mod's page is open
@@ -703,7 +705,7 @@ bool mod_card(App &a, const NexusMod &m, int idx, float cw, float ch, float th)
 
 void store_grid(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
 {
-    int &dec = g_st.cogDefault.emplace(sg.domain, -1).first->second;
+    int &tagged = g_st.cogTagged.emplace(sg.domain, -1).first->second;
     NexusQuery q;
     q.domain = sg.domain;
     q.text = g_st.searchSent;
@@ -713,12 +715,14 @@ void store_grid(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
     q.offset = g_st.offset;
     q.count = kPerPage;
     const FabStoreList L = fab_store_list(a, q);
-    // "Made for COGBox" starts on when the game has a tagged mod (the first answer, asked with it on, says)
-    if (dec < 0 && L.answered && L.q.cogbox_only && L.q.text.empty() && L.q.offset == 0 && L.q.domain == sg.domain) {
-        dec = L.total > 0 ? 1 : 0;
-        if (!dec) { g_st.cogbox = false; return; }   // (asked again without the tag next frame)
+    // whether the game has a tagged mod: any answer asked with the tag, no search, from the start says. "Made for
+    // COGBox" starts on, and goes off by itself when the first such answer has none (unless the player set it).
+    if (L.answered && L.q.cogbox_only && L.q.text.empty() && L.q.offset == 0 && L.q.domain == sg.domain) {
+        const int was = tagged;
+        tagged = L.total > 0 ? 1 : 0;
+        if (was < 0 && !tagged && !g_st.cogChoice.count(sg.domain)) { g_st.cogbox = false; return; }   // (asked again without it)
     }
-    if (dec == 0 && !g_st.cogbox)
+    if (tagged == 0 && !g_st.cogbox)
         ui_note(trf("No {1} mods on Nexus Mods have the COGBox tag yet. Making one? Add the COGBox tag to its page so players find it here.", { game_def(sg.g).shortName }));
     ImGui::Dummy(ImVec2(0, S(4)));
     if (L.loading || (!L.answered && L.problem.empty())) { ui_note(std::string(tr("Loading mods from Nexus Mods")) + kEllipsis); return; }
@@ -727,11 +731,32 @@ void store_grid(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
         if (btn("Try again")) fab_store_forget_failures();
         return;
     }
+    // the pages (total clamped first: the server's number is not trusted)
+    const int64_t total = std::max<int64_t>(0, std::min<int64_t>(L.total, 100000000));
+    const int64_t pages = (total + kPerPage - 1) / kPerPage, at = g_st.offset / kPerPage + 1;
+    auto paging = [&] {
+        ImGui::Dummy(ImVec2(0, S(8)));
+        if (pages > 1 || g_st.offset > 0) {   // (also on a page past the end, so Previous gets back)
+            if (btn("Previous", g_st.offset > 0)) { g_st.offset = std::max(0, g_st.offset - kPerPage); ImGui::SetScrollY(0); }
+            ImGui::SameLine(0, S(12));
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(trf("Page {1} of {2}", { std::to_string(at), std::to_string(std::max(pages, at)) }).c_str());
+            ImGui::SameLine(0, S(12));
+            if (btn("Next", at < pages && g_st.offset <= INT_MAX - 2 * kPerPage)) { g_st.offset += kPerPage; ImGui::SetScrollY(0); }
+            ImGui::SameLine(0, S(16));
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, col::dim);
+        ImGui::TextUnformatted(total == 1 ? tr("1 mod") : trf("{1} mods", { std::to_string(total) }).c_str());
+        ImGui::PopStyleColor();
+    };
     std::vector<const NexusMod *> shown;
     for (const NexusMod &m : L.mods) if (!m.adult || acc.allow_adult) shown.push_back(&m);
     if (shown.empty()) {
-        if (!q.text.empty()) ui_note(trf("No mods match \"{1}\".", { q.text }));
+        if (g_st.offset > 0) ui_note("No more mods on this page.");
+        else if (!q.text.empty()) ui_note(trf("No mods match \"{1}\".", { q.text }));
         else ui_note("No mods here yet.");
+        if (g_st.offset > 0) paging();
         return;
     }
     const float W = ui_row_x1() - ImGui::GetCursorScreenPos().x, gap = S(14), minW = T(250);
@@ -747,22 +772,7 @@ void store_grid(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
             ImGui::SetScrollY(0);
         }
     }
-    // the pages
-    const int pages = (L.total + kPerPage - 1) / kPerPage, at = g_st.offset / kPerPage + 1;
-    ImGui::Dummy(ImVec2(0, S(8)));
-    if (pages > 1) {
-        if (btn("Previous", g_st.offset > 0)) { g_st.offset = std::max(0, g_st.offset - kPerPage); ImGui::SetScrollY(0); }
-        ImGui::SameLine(0, S(12));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(trf("Page {1} of {2}", { std::to_string(at), std::to_string(pages) }).c_str());
-        ImGui::SameLine(0, S(12));
-        if (btn("Next", at < pages)) { g_st.offset += kPerPage; ImGui::SetScrollY(0); }
-        ImGui::SameLine(0, S(16));
-    }
-    ImGui::AlignTextToFramePadding();
-    ImGui::PushStyleColor(ImGuiCol_Text, col::dim);
-    ImGui::TextUnformatted(L.total == 1 ? tr("1 mod") : trf("{1} mods", { std::to_string(L.total) }).c_str());
-    ImGui::PopStyleColor();
+    paging();
 }
 
 void mod_page(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
@@ -887,6 +897,15 @@ void mod_page(App &a, const FabStoreGame &sg, const FabNexusAccountState &acc)
     else plain(cut_utf8(m.description, kDescriptionMax), col::text);
 }
 
+// "Made for COGBox" when a game is chosen: the player's choice, else on unless Nexus Mods said it has no tagged mod
+bool cog_default(const std::string &domain)
+{
+    auto c = g_st.cogChoice.find(domain);
+    if (c != g_st.cogChoice.end()) return c->second;
+    auto t = g_st.cogTagged.find(domain);
+    return t == g_st.cogTagged.end() || t->second != 0;
+}
+
 void nexus_store(App &a)
 {
     if (!fab_store_online(a)) {   // nothing is asked for
@@ -908,8 +927,7 @@ void nexus_store(App &a)
         g_st.game = sg->g;
         g_st.offset = 0;
         g_st.page = false;
-        auto it = g_st.cogDefault.find(sg->domain);
-        g_st.cogbox = it == g_st.cogDefault.end() || it->second != 0;
+        g_st.cogbox = cog_default(sg->domain);
     }
 
     // the header: game, search, sort, Made for COGBox; the account on the right
@@ -930,8 +948,7 @@ void nexus_store(App &a)
                 g_st.game = n.g;
                 g_st.offset = 0;
                 g_st.page = false;
-                auto it = g_st.cogDefault.find(n.domain);
-                g_st.cogbox = it == g_st.cogDefault.end() || it->second != 0;
+                g_st.cogbox = cog_default(n.domain);
                 sg = &n;
             }
             ImGui::SameLine(0, S(18));
@@ -950,7 +967,7 @@ void nexus_store(App &a)
             bool cog = g_st.cogbox;
             if (ImGui::Checkbox(tr("Made for COGBox"), &cog)) {
                 g_st.cogbox = cog;
-                g_st.cogDefault[sg->domain] = cog ? 1 : 0;   // (the player's choice from now on)
+                g_st.cogChoice[sg->domain] = cog;   // (the player's choice from now on; cogTagged stays what Nexus Mods said)
                 g_st.offset = 0;
                 g_st.page = false;
             }
