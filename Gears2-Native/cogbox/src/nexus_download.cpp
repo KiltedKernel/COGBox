@@ -165,10 +165,39 @@ std::string nexus_try_premium_download(const std::string &domain, int64_t mod_id
     wipe(r.body);
     if (!links || links->empty()) return "Nexus Mods gave no download for that file.";
     if (p.cancel) return "cancelled";
-    NexusResponse d = nexus_download(links->front(), dest_zip, {}, &p.cancel, &p.done, &p.total);
+    // the links in order: the next one when one fails (refused, cut off, unreachable)
+    std::string e = "Nexus Mods gave no download for that file.";
+    for (const std::string &l : *links) {
+        NexusResponse d = nexus_download(l, dest_zip, {}, &p.cancel, &p.done, &p.total);
+        e = d.error;
+        if (e.empty() || e == "cancelled" || p.cancel) break;
+    }
     for (std::string &l : *links) wipe(l);
-    if (d.error == "cancelled") return "cancelled";
-    return d.error;
+    if (p.cancel) e = "cancelled";
+    if (!e.empty()) return e;
+    const std::string bad = nexus_archive_problem(dest_zip);
+    if (!bad.empty()) DeleteFileW(wide_of(dest_zip).c_str());   // (ours: just written)
+    return bad;
+}
+
+std::string nexus_archive_problem(const std::string &path)
+{
+    HANDLE f = CreateFileW(wide_of(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return "The file couldn't be read.";
+    unsigned char b[8] = {};
+    DWORD n = 0;
+    const BOOL ok = ReadFile(f, b, sizeof b, &n, nullptr);
+    CloseHandle(f);
+    if (!ok) return "The file couldn't be read.";
+    static const unsigned char zip[4] = { 0x50, 0x4B, 0x03, 0x04 }, sevenz[6] = { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C };
+    if (n >= 4 && !memcmp(b, zip, 4)) return {};
+    const char *kind = nullptr;
+    if (n >= 6 && !memcmp(b, sevenz, 6)) kind = ".7z";
+    else if (n >= 4 && !memcmp(b, "Rar!", 4)) kind = ".rar";
+    if (kind)
+        return std::string("COGBox can install .zip mods only. This file is a ") + kind +
+               " - ask the mod's author for a .zip, or unpack it and add the folder.";
+    return "not a .zip file";
 }
 
 // ---- the free flow ----------------------------------------------------------------------------------------------------
@@ -254,14 +283,16 @@ std::optional<NexusUpdate> nexus_find_update(const std::vector<NexusFile> &files
         if (f.file_id == installed_file_id) { inst = &f; break; }
     const std::string inst_stem = inst ? name_stem(inst->name) : std::string();
     const int64_t inst_at = inst ? unix_of_iso(inst->uploaded_at) : -1;
-    const std::string inst_ver = !installed_version.empty() ? installed_version : inst ? inst->version : std::string();
+    // the installed Nexus file's own version when it is listed (mod.ini's version may be written differently)
+    const std::string inst_ver = inst && !inst->version.empty() ? inst->version : installed_version;
 
     NexusUpdate u;
     const NexusFile *best = nullptr;
     int64_t best_at = -1;
     for (const NexusFile &f : files) {
         if (f.file_id <= 0 || f.file_id == installed_file_id || dead_category(f.category)) continue;
-        if (f.category != "MAIN" && (inst_stem.empty() || name_stem(f.name) != inst_stem)) continue;
+        // the installed file known: the same name stem (another MAIN variant is not an update); else a MAIN file
+        if (inst ? name_stem(f.name) != inst_stem : f.category != "MAIN") continue;
         const int64_t at = unix_of_iso(f.uploaded_at);
         const int vc = nexus_version_compare(f.version, inst_ver);
         if (vc < 0) continue;   // an older version uploaded again later is not an update

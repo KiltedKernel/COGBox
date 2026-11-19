@@ -184,6 +184,23 @@ static void test_find_download()
     CHECK(!nexus_downloads_folder().empty());
 }
 
+static void test_archive_problem()
+{
+    const std::string d = temp_dir("cogbox-nexus-archive");
+    make_file(d + "\\a.zip", std::string("PK\x03\x04rest", 8), 0);
+    make_file(d + "\\b.zip", std::string("\x37\x7A\xBC\xAF\x27\x1C\x00\x04", 8), 0);
+    make_file(d + "\\c.zip", "Rar!\x1A\x07\x00", 0);
+    make_file(d + "\\d.zip", "<html>", 0);
+    make_file(d + "\\e.zip", "", 0);
+    CHECK(nexus_archive_problem(d + "\\a.zip").empty());
+    CHECK(nexus_archive_problem(d + "\\b.zip") == "COGBox can install .zip mods only. This file is a .7z - ask the mod's author for a .zip, or unpack it and add the folder.");
+    CHECK(nexus_archive_problem(d + "\\c.zip") == "COGBox can install .zip mods only. This file is a .rar - ask the mod's author for a .zip, or unpack it and add the folder.");
+    CHECK(nexus_archive_problem(d + "\\d.zip") == "not a .zip file");
+    CHECK(nexus_archive_problem(d + "\\e.zip") == "not a .zip file");
+    CHECK(!nexus_archive_problem(d + "\\missing.zip").empty());
+    remove_tree(d);
+}
+
 static NexusFile file(int64_t id, const char *name, const char *version, const char *category, const char *uploaded)
 {
     NexusFile f;
@@ -237,6 +254,22 @@ static void test_find_update()
                                     file(42, "Pack", "1.2", "MAIN", "2026-03-01T00:00:00Z") };
     u = nexus_find_update(many, 40, "1.0");
     CHECK(u && u->available && u->file.file_id == 42);
+
+    // the installed Nexus file's own version counts, not mod.ini's: mod.ini "1.0", installed file 1.2, an older 1.1
+    std::vector<NexusFile> own = { file(50, "Pack", "1.1", "OLD_VERSION", "2026-01-01T00:00:00Z"),
+                                   file(51, "Pack", "1.1", "MAIN", "2026-01-15T00:00:00Z"),
+                                   file(52, "Pack", "1.2", "MAIN", "2026-02-01T00:00:00Z") };
+    u = nexus_find_update(own, 52, "1.0");
+    CHECK(u && !u->available);
+    // mod.ini "2.0" against Nexus 1.x: the newer 1.3 is an update of installed 1.2
+    own.push_back(file(53, "Pack", "1.3", "MAIN", "2026-03-01T00:00:00Z"));
+    u = nexus_find_update(own, 52, "2.0");
+    CHECK(u && u->available && u->file.file_id == 53);
+    // another MAIN variant (another name stem) of a known installed file is not an update
+    std::vector<NexusFile> variants = { file(60, "Pack Lite", "1.0", "MAIN", "2026-01-01T00:00:00Z"),
+                                        file(61, "Pack Full", "1.1", "MAIN", "2026-02-01T00:00:00Z") };
+    u = nexus_find_update(variants, 60, "1.0");
+    CHECK(u && !u->available);
 
     CHECK(nexus_version_compare("1.10", "1.9") > 0);
     CHECK(nexus_version_compare("v2", "2.0") == 0);
@@ -308,7 +341,7 @@ static void test_premium()
     nexus_auth_test_memory_store(true);
     const std::string d = temp_dir("cogbox-nexus-dl");
     const std::string zip = d + "\\mod.zip";
-    std::string bytes;
+    std::string bytes("PK\x03\x04", 4);   // (a zip's signature, then binary, over one read buffer)
     for (int i = 0; i < 300000; i++) bytes += (char)(i * 7 + (i >> 9));   // (binary, over one read buffer)
 
     // nobody signed in: "not premium", nothing asked
@@ -388,6 +421,42 @@ static void test_premium()
         CHECK(!e.empty() && e != "not premium" && !contains(e, "nexus-cdn") && !contains(e, "127.0.0.1"));
         CHECK(!exists(zip + ".part") && read_all(zip) == bytes);
     }
+    // the first link fails (410), the second works: the file is the second's
+    {
+        Server s;
+        s.answer = [&](const std::string &path) {
+            if (path.rfind("/v1/", 0) == 0)
+                return http(200, R"([{"URI":"https://a.nexus-cdn.com/files/27/gone.zip"},{"URI":"https://b.nexus-cdn.com/files/27/ok.zip"}])");
+            if (path == "/files/27/ok.zip") return http(200, bytes);
+            return http(410, "gone");
+        };
+        CHECK(s.start(3));
+        nexus_set_test_base("http://127.0.0.1:" + std::to_string(s.port));
+        DeleteFileW(W(zip).c_str());
+        FabProgress p;
+        CHECK(nexus_try_premium_download("gearsofwar3", 27, 56, zip, p).empty());
+        s.stop();
+        CHECK(s.requests.size() == 3 && read_all(zip) == bytes && !exists(zip + ".part"));
+    }
+    // a .7z, a .rar, something else: the archive problem, and the downloaded file is deleted
+    for (int k = 0; k < 3; k++) {
+        const std::string body = k == 0 ? std::string("\x37\x7A\xBC\xAF\x27\x1C\x00\x04 7z data", 16)
+                               : k == 1 ? std::string("Rar!\x1A\x07\x01\x00 rar data", 17) : std::string("<html>not a file</html>");
+        Server s;
+        s.answer = [&](const std::string &path) {
+            if (path.rfind("/v1/", 0) == 0) return http(200, R"([{"URI":"https://cf-files.nexus-cdn.com/files/27/m"}])");
+            return http(200, body);
+        };
+        CHECK(s.start(2));
+        nexus_set_test_base("http://127.0.0.1:" + std::to_string(s.port));
+        FabProgress p;
+        const std::string e = nexus_try_premium_download("gearsofwar3", 27, 56, zip, p);
+        s.stop();
+        if (k == 0) CHECK(e == "COGBox can install .zip mods only. This file is a .7z - ask the mod's author for a .zip, or unpack it and add the folder.");
+        if (k == 1) CHECK(e == "COGBox can install .zip mods only. This file is a .rar - ask the mod's author for a .zip, or unpack it and add the folder.");
+        if (k == 2) CHECK(e == "not a .zip file");
+        CHECK(!exists(zip) && !exists(zip + ".part"));
+    }
     // no links / not a list: a problem; a 404 for the file
     {
         Server s;
@@ -465,6 +534,7 @@ int main()
 {
     test_find_download();
     test_find_update();
+    test_archive_problem();
     test_premium();
     printf("%d failure(s)\n", g_failures);
     return g_failures;
