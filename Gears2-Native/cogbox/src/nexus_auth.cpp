@@ -295,8 +295,8 @@ std::optional<std::string> read_blob()   // (g_store_mu held)
 
 void delete_chunks_from(int first)   // (g_store_mu held)
 {
-    for (int i = first; i < kMaxChunks + 8; i++)
-        if (!CredDeleteW(chunk_name(i).c_str(), CRED_TYPE_GENERIC, 0) && GetLastError() == ERROR_NOT_FOUND) break;
+    for (int i = first; i < kMaxChunks; i++)   // every slot: one missing chunk (deleted by hand) must not hide the rest
+        CredDeleteW(chunk_name(i).c_str(), CRED_TYPE_GENERIC, 0);
 }
 
 bool write_blob(const std::string &blob)   // (g_store_mu held)
@@ -395,21 +395,26 @@ struct Sock {
     ~Sock() { if (s != INVALID_SOCKET) closesocket(s); }
 };
 
-// Reads the request head (up to the blank line), at most kMaxHead bytes and 5 s. "" when there is none.
-std::string read_head(SOCKET c)
+using Clock = std::chrono::steady_clock;
+
+// What is left of `until`, in ms, for a socket timeout (at least 1; 0 = past it).
+DWORD ms_left(Clock::time_point until)
 {
-    DWORD to = 1000;
-    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char *)&to, sizeof to);
-    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(until - Clock::now()).count();
+    return left <= 0 ? 0 : (DWORD)left;
+}
+
+// Reads the request head (up to the blank line), at most kMaxHead bytes, by `until`. "" when there is none.
+std::string read_head(SOCKET c, Clock::time_point until)
+{
     std::string head;
     char buf[2048];
-    while (head.size() < kMaxHead && std::chrono::steady_clock::now() < until) {
+    while (head.size() < kMaxHead) {
+        const DWORD to = ms_left(until);
+        if (to == 0) break;
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char *)&to, sizeof to);
         const int n = recv(c, buf, (int)std::min(sizeof buf, kMaxHead - head.size()), 0);
-        if (n == 0) break;
-        if (n < 0) {
-            if (WSAGetLastError() == WSAETIMEDOUT) continue;
-            break;
-        }
+        if (n <= 0) break;   // closed, timed out or failed
         head.append(buf, n);
         const size_t end = head.find("\r\n\r\n");
         if (end != std::string::npos) {
@@ -420,24 +425,29 @@ std::string read_head(SOCKET c)
     return "";
 }
 
-// Sends the answer with Connection: close and waits (briefly) for the browser to close first, so the port is not left
-// in TIME_WAIT for the next sign-in.
-void answer(SOCKET c, int status, const char *reason, const std::string &html)
+// Sends the answer with Connection: close and waits (until `until` at most) for the browser to close first, so the
+// port is not left in TIME_WAIT for the next sign-in.
+void answer(SOCKET c, int status, const char *reason, const std::string &html, Clock::time_point until)
 {
     const std::string a = "HTTP/1.1 " + std::to_string(status) + " " + reason +
                           "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + std::to_string(html.size()) +
                           "\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\n"
                           "Connection: close\r\n\r\n" + html;
+    DWORD to = ms_left(until);
+    if (to == 0) return;
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char *)&to, sizeof to);
     size_t at = 0;
     while (at < a.size()) {
         const int n = send(c, a.data() + at, (int)(a.size() - at), 0);
         if (n <= 0) return;
         at += (size_t)n;
     }
-    DWORD to = 2000;
-    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char *)&to, sizeof to);
     char buf[512];
-    for (int spins = 0; spins < 16 && recv(c, buf, sizeof buf, 0) > 0; spins++) {
+    for (int spins = 0; spins < 16; spins++) {
+        to = ms_left(until);
+        if (to == 0) break;
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char *)&to, sizeof to);
+        if (recv(c, buf, sizeof buf, 0) <= 0) break;
     }
 }
 
@@ -571,7 +581,8 @@ std::string nexus_sign_in(std::atomic<bool> &cancel, NexusAccount *out)
     ls.s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (ls.s == INVALID_SOCKET) return "COGBox could not listen for the sign-in.";
     BOOL exclusive = TRUE;
-    setsockopt(ls.s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&exclusive, sizeof exclusive);
+    if (setsockopt(ls.s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&exclusive, sizeof exclusive) != 0)
+        return "COGBox could not listen for the sign-in.";   // (never listen on a port another program could share)
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   // 127.0.0.1 only, never every address
@@ -600,24 +611,25 @@ std::string nexus_sign_in(std::atomic<bool> &cancel, NexusAccount *out)
         Sock c;
         c.s = accept(ls.s, nullptr, nullptr);
         if (c.s == INVALID_SOCKET) continue;
-        const std::string head = read_head(c.s);
+        const auto conn_until = Clock::now() + std::chrono::seconds(2);   // one connection's whole time: read + answer
+        const std::string head = read_head(c.s, conn_until);
         if (head.empty()) {
-            answer(c.s, 400, "Bad Request", page("Bad request."));
+            answer(c.s, 400, "Bad Request", page("Bad request."), conn_until);
             continue;
         }
         NexusCallback cb = nexus_parse_callback(head, state);
         switch (cb.kind) {
         case NexusCallback::NotFound:
-            answer(c.s, 404, "Not Found", page("Not found."));
+            answer(c.s, 404, "Not Found", page("Not found."), conn_until);
             break;
         case NexusCallback::BadState:
-            answer(c.s, 400, "Bad Request", page("This is not the sign-in COGBox is waiting for. Start it again from COGBox."));
+            answer(c.s, 400, "Bad Request", page("This is not the sign-in COGBox is waiting for. Start it again from COGBox."), conn_until);
             break;
         case NexusCallback::Failed:
-            answer(c.s, 200, "OK", page("You can close this tab and return to COGBox."));
+            answer(c.s, 200, "OK", page("You can close this tab and return to COGBox."), conn_until);
             return cb.problem;
         case NexusCallback::Code:
-            answer(c.s, 200, "OK", page("You can close this tab and return to COGBox."));
+            answer(c.s, 200, "OK", page("You can close this tab and return to COGBox."), conn_until);
             code = cb.code;
             wipe(cb.code);
             break;
@@ -626,18 +638,21 @@ std::string nexus_sign_in(std::atomic<bool> &cancel, NexusAccount *out)
     closesocket(ls.s);   // nothing more to hear
     ls.s = INVALID_SOCKET;
     if (cancel) return "Sign-in was cancelled.";
+    if (std::chrono::steady_clock::now() >= deadline) return "Sign-in timed out - try again.";
 
     const std::string form = "grant_type=authorization_code&code=" + pct_encode(code) + "&redirect_uri=" + pct_encode(kNexusRedirectUri) +
                              "&client_id=" + pct_encode(client) + "&code_verifier=" + pct_encode(verifier);
     wipe(code);
     wipe(verifier);
-    NexusResponse r = nexus_request("POST", kNexusTokenUrl, form, form_headers(), 30000);
+    NexusResponse r = nexus_request("POST", kNexusTokenUrl, form, form_headers(), 15000);
     NexusTokens t;
+    if (cancel) return "Sign-in was cancelled.";   // (nothing stored)
     if (r.status == 0) return kUnreachable;
     if (r.status != 200 || !parse_token_answer(r.body, &t)) return "Nexus Mods did not accept the sign-in - try again.";
     wipe(r.body);
 
     NexusResponse u = nexus_request("GET", kNexusUserinfoUrl, "", { { "Authorization", "Bearer " + t.access }, { "Accept", "application/json" } }, 15000);
+    if (cancel) return "Sign-in was cancelled.";
     const std::string name = nexus_name_from_userinfo(u.status == 200 ? u.body : std::string(), t.id_token, t.access);
 
     std::lock_guard<std::mutex> lk(g_session_mu);
@@ -709,7 +724,11 @@ NexusAccount nexus_account()
     return a;
 }
 
-bool nexus_store_tokens(const NexusTokens &t) { return store_session(t, nullptr); }
+bool nexus_store_tokens(const NexusTokens &t)
+{
+    std::lock_guard<std::mutex> lk(g_session_mu);   // (never in the middle of a refresh or sign-out)
+    return store_session(t, nullptr);
+}
 
 std::optional<NexusTokens> nexus_load_tokens()
 {
@@ -718,7 +737,11 @@ std::optional<NexusTokens> nexus_load_tokens()
     return s->t;
 }
 
-void nexus_delete_tokens() { delete_session(); }
+void nexus_delete_tokens()
+{
+    std::lock_guard<std::mutex> lk(g_session_mu);
+    delete_session();
+}
 
 #ifdef COGBOX_NEXUS_TESTS
 void nexus_auth_test_memory_store(bool on)

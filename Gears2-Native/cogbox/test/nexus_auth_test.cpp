@@ -413,15 +413,34 @@ static void test_denied_flow()
     std::string aok;
     nexus_auth_test_browser_hook([&](const std::string &u) {
         browser = std::thread([&, u] {
+            // a connection that never sends anything is dropped after about 2 s and does not block the sign-in
+            SOCKET silent = INVALID_SOCKET;
+            for (int i = 0; i < 40 && silent == INVALID_SOCKET; i++) {
+                silent = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                sockaddr_in a{};
+                a.sin_family = AF_INET;
+                a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                a.sin_port = htons(kNexusCallbackPort);
+                if (connect(silent, (sockaddr *)&a, sizeof a) != 0) {
+                    closesocket(silent);
+                    silent = INVALID_SOCKET;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));   // (accepted first)
             aok = browser_get("/callback?error=access_denied&state=" + param(u.substr(u.find('?') + 1), "state"));
+            if (silent != INVALID_SOCKET) closesocket(silent);
         });
     });
     std::atomic<bool> cancel{ false };
     NexusAccount acc;
+    const auto t0 = std::chrono::steady_clock::now();
     const std::string p = nexus_sign_in(cancel, &acc);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     if (browser.joinable()) browser.join();
     api.stop();
     CHECK(p == "Sign-in was cancelled on Nexus Mods.");
+    CHECK(ms < 4000);   // the silent connection cost at most its 2 s
     CHECK(contains(aok, "You can close this tab and return to COGBox"));
     CHECK(api.got().empty());   // nothing exchanged
     CHECK(!nexus_load_tokens() && !acc.signed_in);
@@ -637,6 +656,17 @@ static void test_chunking()
         const std::wstring n = L"COGBox/NexusModsTest/" + std::to_wstring(i);
         CHECK(!cred_exists(n.c_str(), nullptr));
         CredDeleteW(n.c_str(), CRED_TYPE_GENERIC, 0);   // (left nothing behind either way)
+    }
+    // chunk 0 deleted by hand (or lost): nexus_delete_tokens still removes the rest
+    CHECK(nexus_store_tokens(t));
+    CHECK(cred_exists(L"COGBox/NexusModsTest/2", nullptr));
+    CredDeleteW(L"COGBox/NexusModsTest/0", CRED_TYPE_GENERIC, 0);
+    CHECK(!nexus_load_tokens());
+    nexus_delete_tokens();
+    for (int i = 0; i < 4; i++) {
+        const std::wstring n = L"COGBox/NexusModsTest/" + std::to_wstring(i);
+        CHECK(!cred_exists(n.c_str(), nullptr));
+        CredDeleteW(n.c_str(), CRED_TYPE_GENERIC, 0);
     }
     nexus_auth_test_memory_store(true);
 }
