@@ -1,5 +1,6 @@
 // COGBox - the FABRICATOR screen's state (the local mod manager): one worker thread for the long parts, the jobs and
 // their progress, and the LIBRARY's view of each game's mods folder. Everything is local: nothing is fetched or sent.
+// (COGBOX_FAB_NEXUS builds add the Nexus Mods jobs below: their requests run on the worker, with Online play on.)
 //
 // The hand-off: the UI thread makes a job and posts it to the worker. The worker touches only the job and the files it
 // names (a temporary zip in <exe dir>\fabricator\work, a <mods>\<folder>.partial, the zip a creator chose) - never App,
@@ -12,6 +13,12 @@
 #include "fabricator_install.h"
 #include "fabricator_model.h"
 #include "fabricator_pack.h"
+#ifdef COGBOX_FAB_NEXUS
+#include "nexus_api.h"
+#include "nexus_download.h"
+
+#include <map>
+#endif
 
 #include <atomic>
 #include <memory>
@@ -30,7 +37,12 @@ struct FabJob {
         Waiting,     // Add: ready to install; waits for the game to close and for another install to finish
         Unpacking,   // Add: unpacked into <folder>.partial on the worker
         Unpacked,    // Add: the UI thread moves it into place (waits while the game runs)
-        Done, Failed, Cancelled
+        Done, Failed, Cancelled,
+#ifdef COGBOX_FAB_NEXUS
+        Downloading,   // Nexus: the Premium download into work_dir on the worker (then Checking)
+        Pickup,        // Nexus: the file's page is open in the browser; the UI thread looks in Downloads every 2 s
+                       // (30 min) for the file, then Queued -> Checking with zip = that file (never removed by COGBox)
+#endif
     };
     int id = 0;
     Kind kind = Add;
@@ -59,6 +71,19 @@ struct FabJob {
     // Pack: source (the folder) into zip. Check: source (the folder) for game_key.
     std::string game_key;
     std::vector<std::string> problems;   // Failed: why (Add, Pack); Check: what the folder has to fix (empty = clean)
+
+#ifdef COGBOX_FAB_NEXUS
+    // Add from Nexus Mods: the record's source (kind "nexus", its game domain, mod and file); kind "file" otherwise
+    FabSource nexus;
+    // (UI) Pickup: the page opened yet, the Downloads folder and the expected names, until when (SDL ticks), the next
+    // look, and the file seen at the last look with its size (taken once it is the same two looks running)
+    bool pickup_opened = false;
+    std::string pickup_folder;
+    NexusPickup pickup;
+    Uint64 pickup_until = 0, pickup_next = 0;
+    std::string pickup_seen;
+    int64_t pickup_size = -1;
+#endif
 };
 
 // A dropped or chosen .zip or folder: added to the LIBRARY's game (or the game its mod.ini names).
@@ -87,6 +112,28 @@ int fab_library_game(const App &a);   // the game filter (GameId); the game in f
 void fab_library_set_game(int g);
 const std::vector<FabLibRow> &fab_library(App &a, int g);   // read again every 2 s and after fab_library_changed
 void fab_library_changed();
+
+#ifdef COGBOX_FAB_NEXUS
+// Nexus Mods (each does nothing with Online play off but say so; every request runs on the worker):
+// fab_nexus_get: file f of mod m for game g. The Premium download first (signed in); on "not premium" the file's page
+// (nexus_mod_url) opens in the browser and the job waits up to 30 min for the file in Downloads (FabJob::Pickup). Then
+// the usual check and install (an update when that Nexus mod is installed), recorded with the nexus source.
+void fab_nexus_get(App &a, int g, const NexusMod &m, const NexusFile &f);
+// The manual fallback ("Choose the file..."): the zip the player chose is file f of mod m. A Pickup job of that file
+// takes it; else a new add with the nexus source. No request.
+void fab_nexus_choose_file(App &a, int g, const NexusMod &m, const NexusFile &f, const std::string &zip);
+// "Check for updates": each LIBRARY row of game g with a nexus source, its mod's files asked for on the worker and
+// compared with nexus_find_update. fab_nexus_updates(g) has the answers by mod folder; fab_nexus_update(g, folder)
+// gets the update found for that row (fab_nexus_get).
+void fab_nexus_check_updates(App &a, int g);
+struct FabNexusUpdates {
+    bool checking = false;
+    std::string problem;                             // "" or why a check could not finish (the first problem)
+    std::map<std::string, NexusUpdate> by_folder;    // the rows checked (available = an update was found)
+};
+FabNexusUpdates fab_nexus_updates(int g);
+void fab_nexus_update(App &a, int g, const std::string &folder);
+#endif
 
 // The Fabricator's questions (ask tags "fabupdate", "fabuninstall"), from main.cpp's modal answers.
 bool fab_answer(App &a, const Modal &m);   // false: not one of them
