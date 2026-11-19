@@ -19,6 +19,8 @@ constexpr const char *kNexusRevokeUrl = "https://users.nexusmods.com/oauth/revok
 constexpr const char *kNexusUserinfoUrl = "https://users.nexusmods.com/oauth/userinfo";
 constexpr const char *kNexusRedirectUri = "http://127.0.0.1:28654/callback";
 constexpr int kNexusCallbackPort = 28654;
+// nexus_access_token's problem when a refresh was refused (the tokens are deleted): the player must be told
+constexpr const char *kNexusSignedOut = "You were signed out of Nexus Mods - sign in again.";
 
 struct NexusTokens {
     std::string access, refresh, id_token;

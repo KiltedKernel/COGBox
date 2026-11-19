@@ -447,6 +447,17 @@ static void test_transport()
         CHECK(r.status == 200);
         CHECK(contains(lb.request, "Application-Name: COGBox\r\n") && !contains(lb.request, "Other") && !contains(lb.request, ": 9\r\n"));
     }
+    for (const char *host : { "api.nexusmods.com", "users.nexusmods.com", "staticdelivery.nexusmods.com", "x.nexus-cdn.com" }) {
+        // Authorization goes only to api / users.nexusmods.com, whatever the caller passes
+        Loopback lb;
+        CHECK(lb.start("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"));
+        nexus_set_test_base("http://127.0.0.1:" + std::to_string(lb.port));
+        NexusResponse r = nexus_request("GET", std::string("https://") + host + "/x", "", { { "authorization", "Bearer secret-t" } }, 5000);
+        lb.stop();
+        const bool to_us = std::string(host) == "api.nexusmods.com" || std::string(host) == "users.nexusmods.com";
+        CHECK(r.status == 200);
+        CHECK(contains(lb.request, "secret-t") == to_us);
+    }
     nexus_set_test_base("");
     WSACleanup();
 }

@@ -182,8 +182,9 @@ struct FabStorePage {
 FabStorePage fab_store_page(App &a, const std::string &domain, int game_id, int64_t mod_id);
 void fab_store_forget_failures();   // Try again: the next call asks again
 
-// A picture of a mod (https on Nexus Mods' hosts only, at most 8 MiB and 3840x2160, PNG or JPEG), fetched once and
-// kept as a texture (null until it is there, or when it can't be). The textures are freed when the screen closes.
+// A picture of a mod (https on Nexus Mods' hosts only, at most 8 MiB and 3840x2160; PNG or JPEG by stb_image, WebP - what
+// the CDN sends - by Windows' WIC decoder), fetched once and kept as a texture (null until it is there, or when it can't
+// be). The textures are freed when the screen closes.
 SDL_Texture *fab_store_picture(App &a, const std::string &url, int *w, int *h);
 
 // The Nexus Mods account: one sign-in at a time (its own thread; the browser approves it), sign-out, and whether

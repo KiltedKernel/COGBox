@@ -350,6 +350,25 @@ static void test_premium()
         FabProgress p;
         CHECK(nexus_try_premium_download("gearsofwar3", 27, 56, zip, p) == "not premium");
     }
+    // a refresh refused (400): the player is told they were signed out (no quiet free flow), no link asked for
+    {
+        _putenv_s("COGBOX_NEXUS_CLIENT_ID", "test-client");
+        NexusTokens old;
+        old.access = "old-access";
+        old.refresh = "old-refresh";
+        old.expires_at = (int64_t)time(nullptr) - 10;
+        CHECK(nexus_store_tokens(old));
+        Server s;
+        s.answer = [](const std::string &) { return http(400, R"({"error":"invalid_grant"})"); };
+        CHECK(s.start(1));
+        nexus_set_test_base("http://127.0.0.1:" + std::to_string(s.port));
+        FabProgress p;
+        CHECK(nexus_try_premium_download("gearsofwar3", 27, 56, zip, p) == kNexusSignedOut);
+        s.stop();
+        CHECK(s.requests.size() == 1 && contains(s.requests[0], "POST /oauth/token"));
+        CHECK(!nexus_load_tokens());
+        _putenv_s("COGBOX_NEXUS_CLIENT_ID", "");
+    }
     NexusTokens t;
     t.access = "test-access-token";
     t.refresh = "test-refresh";

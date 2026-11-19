@@ -37,7 +37,7 @@ constexpr int kMaxChunks = 32;         // 64 KB: a session is a few KB
 constexpr size_t kMaxHead = 8192;      // the most of a browser request the listener reads
 constexpr int64_t kRefreshEarly = 300; // refresh 5 min before expiry
 
-constexpr const char *kSignedOut = "You were signed out of Nexus Mods - sign in again.";
+constexpr const char *kSignedOut = kNexusSignedOut;
 constexpr const char *kBusyPort = "Close whatever is using port 28654 and try again.";
 constexpr const char *kDenied = "Sign-in was cancelled on Nexus Mods.";
 constexpr const char *kUnreachable = "Nexus Mods could not be reached - try again.";
@@ -700,18 +700,19 @@ void nexus_sign_out()
 {
     std::lock_guard<std::mutex> lk(g_session_mu);
     auto s = load_session();
-    if (!s) {
-        delete_session();
-        return;
-    }
+    delete_session();   // first: gone here even if the revoke never answers or COGBox closes meanwhile
+    if (!s) return;
     const std::string client = nexus_client_id();
     const bool by_refresh = !s->t.refresh.empty();
-    if (!client.empty()) {
-        const std::string form = "token=" + pct_encode(by_refresh ? s->t.refresh : s->t.access) + "&token_type_hint=" +
-                                 (by_refresh ? "refresh_token" : "access_token") + "&client_id=" + pct_encode(client);
-        nexus_request("POST", kNexusRevokeUrl, form, form_headers(), 5000);   // best effort: the answer does not matter
+    if (!client.empty()) {   // then the revoke at Nexus Mods with the copy in memory (best effort: the answer does not matter)
+        std::string form = "token=" + pct_encode(by_refresh ? s->t.refresh : s->t.access) + "&token_type_hint=" +
+                           (by_refresh ? "refresh_token" : "access_token") + "&client_id=" + pct_encode(client);
+        nexus_request("POST", kNexusRevokeUrl, form, form_headers(), 5000);
+        wipe(form);
     }
-    delete_session();
+    wipe(s->t.access);
+    wipe(s->t.refresh);
+    wipe(s->t.id_token);
 }
 
 NexusAccount nexus_account()

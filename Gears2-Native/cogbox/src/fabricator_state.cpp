@@ -367,7 +367,7 @@ void pickup_poll(App &a, const std::shared_ptr<FabJob> &j)
         return;
     }
     if (now >= j->pickup_until) {
-        fail_ui(a, *j, trf("{1} didn't show up in your Downloads folder in 30 minutes. Choose the file instead.", { j->name }));
+        fail_ui(a, *j, trf("{1} didn't show up in your Downloads folder in 30 minutes. Press Get to try again (then Choose the file...), or add the .zip on the LIBRARY tab.", { j->name }));
         return;
     }
     if (now < j->pickup_next || j->pickup_folder.empty()) return;

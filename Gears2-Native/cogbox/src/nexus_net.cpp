@@ -112,6 +112,8 @@ std::string prepare(const std::string &url, const std::vector<std::pair<std::str
 {
     if (!nexus_host_allowed(url)) return "Refused: not a Nexus Mods https address.";
     split_url(url, t);
+    // an Authorization header goes only to api.nexusmods.com / users.nexusmods.com, never to a CDN or another host
+    const bool auth_ok = t->host == "api.nexusmods.com" || t->host == "users.nexusmods.com";
 #ifdef COGBOX_NEXUS_TESTS
     {
         std::lock_guard<std::mutex> lk(g_test_mu);
@@ -130,6 +132,7 @@ std::string prepare(const std::string &url, const std::vector<std::pair<std::str
         if (h.first.empty() || h.first.find_first_of("\r\n:") != std::string::npos || h.second.find_first_of("\r\n") != std::string::npos)
             return "Bad request header.";
         if (_stricmp(h.first.c_str(), "Application-Name") == 0 || _stricmp(h.first.c_str(), "Application-Version") == 0) continue;   // (ours only)
+        if (!auth_ok && _stricmp(h.first.c_str(), "Authorization") == 0) continue;
         if (_stricmp(h.first.c_str(), "Content-Type") == 0) has_type = true;
         *hdr += wide_of(h.first) + L": " + wide_of(h.second) + L"\r\n";
     }

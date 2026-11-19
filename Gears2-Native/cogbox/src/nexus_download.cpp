@@ -151,7 +151,12 @@ std::string nexus_try_premium_download(const std::string &domain, int64_t mod_id
     if (p.cancel) return "cancelled";
     std::string problem;
     std::optional<std::string> token = nexus_access_token(&problem);
-    if (!token || token->empty()) return "not premium";   // (signed out: the free flow; a sign-out is said by the account line)
+    if (p.cancel) {   // (cancelled, or Online play turned off, while the token was got or refreshed)
+        if (token) wipe(*token);
+        return "cancelled";
+    }
+    if (!token && problem == kNexusSignedOut) return problem;   // a refused refresh: said, not a quiet free flow
+    if (!token || token->empty()) return "not premium";   // (signed out, or Nexus Mods unreachable for the refresh: the free flow)
     std::string auth = "Bearer " + *token;
     wipe(*token);
     NexusResponse r = nexus_request("GET", url, "", { { "Authorization", auth }, { "Accept", "application/json" } });

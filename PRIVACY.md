@@ -70,8 +70,9 @@ The **FABRICATOR** screen works offline and **sends nothing**: it makes no netwo
 made with `COGBOX_FAB_NEXUS=1` can reach Nexus Mods, and only as described under "Mods from Nexus Mods" below.) It adds, updates and
 uninstalls mods from files on your PC. What it keeps, in the COGBox folder:
 
-- `fabricator.json` in each mod folder it installed: which mod this is (its name and version, that it was added from a
-  file) and a SHA-256 hash of the zip. COGBox writes it, and it is left out of any zip you make.
+- `fabricator.json` in each mod folder it installed: which mod this is (its name and version, and where it came from:
+  a file, or - in a Nexus Mods test build - the Nexus Mods game domain, mod ID and file ID, used by Check for updates)
+  and a SHA-256 hash of the zip. COGBox writes it, and it is left out of any zip you make.
 - `mods\.fabricator-backup\` in each game's folder: the old copy of a mod after an update, or of one you uninstalled.
   You can delete it yourself at any time.
 - `fabricator\work\` next to COGBox: a temporary folder used while a mod folder is packed and checked. It is removed
@@ -92,13 +93,14 @@ will not be in a release until Nexus Mods approves COGBox's app. The full list o
   COGBox's name and version. Nexus Mods' own privacy policy applies to what it receives.
 - **Your Nexus Mods sign-in is optional.** If you sign in, your browser asks Nexus Mods for your approval, and COGBox
   keeps the tokens it gets in **Windows Credential Manager** (entries named `COGBox/NexusMods`), never in a file of its
-  own and never in a log. Sign out revokes them at Nexus Mods (with Online play on) and deletes them. COGBox reads your account name and your
+  own and never in a log. Sign out deletes them first, then revokes them at Nexus Mods (best effort, with Online play on). COGBox reads your account name and your
   Nexus Mods adult-content setting; adult mods stay hidden unless you are signed in and that setting allows them.
 - **Downloads** go to `fabricator\work\` in the COGBox folder and are deleted once the mod is installed or the add
   fails. A file you download in your browser stays in your Downloads folder: COGBox looks at the names of files there
   while it waits for the one you asked for, and never deletes anything from it.
 - **COGBox never sends any Nexus Mods data to COGBox's own servers** (or to anyone but Nexus Mods). Search and page
-  answers are kept in memory for 5 minutes and nothing else about Nexus Mods is written to disk.
+  answers are kept in memory for 5 minutes. Apart from the sign-in tokens and downloads, the only Nexus Mods data
+  written to disk is the game domain, mod ID and file ID in an installed mod's `fabricator.json`.
 
 ## Problem reports
 

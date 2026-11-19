@@ -3,9 +3,10 @@
 This page describes exactly what COGBox does with Nexus Mods' services. It is written for Nexus Mods (for the app
 registration) and for COGBox maintainers.
 
-**Status:** the integration is in the source behind a build switch (`COGBOX_FAB_NEXUS`). Released COGBox builds do not
-contain it, and no player can use it, until Nexus Mods has registered COGBox as an app and issued a client ID. COGBox is
-not made, endorsed or sponsored by Nexus Mods.
+**Status:** the integration is in the source behind a build switch (`COGBOX_FAB_NEXUS`). This is the test build sent
+with COGBox's API registration request. Released COGBox builds do not contain it, and sign-in stays disabled until Nexus
+Mods issues a client ID (someone who builds with the switch can browse without one). COGBox is not made, endorsed or
+sponsored by Nexus Mods.
 
 ## What it is
 
@@ -30,14 +31,20 @@ Game domains used: `gearsofwar`, `gearsofwar2`, `gearsofwar3`, `gearsofwarjudgem
   callback, a loopback listener on the player's own PC (see "Sign-in").
 - **Every request carries** `Application-Name: COGBox` and `Application-Version: <the COGBox version>`, and the user
   agent `COGBox/<version>`.
-- **Answers are capped at 8 MiB** (file downloads at 4 GiB, streamed to disk), and every request has a time limit.
+- **Answers are capped at 8 MiB** (file downloads at 4 GiB, streamed to disk). Every API and picture request has an
+  overall time limit; a file download has a stall limit instead (30 seconds without data on one read), and the player
+  can cancel it.
+- **The `Authorization` header goes only to `api.nexusmods.com` and `users.nexusmods.com`.** The transport drops it for
+  any other host (CDN and picture hosts), whatever the caller passes.
 - **Hostile data is not trusted.** Names, summaries and descriptions are turned into plain text (HTML and BBCode are
   removed, lengths are capped) and are never used as formats or addresses. Picture and download addresses that are not
   https on the hosts above are ignored.
 - **No scraping, no uploads, no `nxm://` links.** COGBox does not read nexusmods.com web pages, does not upload,
   endorse, track or comment on anything, and does not register an `nxm://` protocol handler.
 - **No disk cache.** List and page answers are kept in memory for 5 minutes (at most 64 of each) and are lost when
-  COGBox closes. The only things written to disk are the sign-in tokens (Credential Manager) and downloaded files.
+  COGBox closes. The only things written to disk are the sign-in tokens (Credential Manager), downloaded files
+  (temporarily, until installed), and, in an installed mod's `fabricator.json`, the Nexus game domain, mod ID and file
+  ID it came from (used by "Check for updates").
 
 ## Every request
 
@@ -51,14 +58,14 @@ search text goes only in `variables`.
 | `query Mod(...)`: `mod(modId, gameId)` | When the player opens a mod's page (unless cached). | none |
 | `query ModFiles(...)`: `modFiles(modId, gameId)` | Right after `Mod`, for the same page. | none |
 | `query ModFiles(...)` | When the player presses "Check for updates" in the LIBRARY: one request for each mod COGBox itself added from Nexus Mods (at most 100). | none |
-| `query Preferences`: `preferences { adult }` | Once after each sign-in, to read the player's adult-content setting. | `Authorization: Bearer <access token>` |
+| `query Preferences`: `preferences { adult }` | Once per COGBox run when the STORE is first opened while signed in, and once after each sign-in, to read the player's adult-content setting. Getting the token for it can also send a token refresh (below) when the token has less than 5 minutes left. | `Authorization: Bearer <access token>` |
 
 Other requests:
 
 | Request | When | Auth |
 |---|---|---|
 | `GET https://api.nexusmods.com/v1/games/{domain}/mods/{mod_id}/files/{file_id}/download_link.json` | The player presses **Get** on a file while signed in. A 401 or 403 (no Premium) means the free flow below. | `Authorization: Bearer <access token>` |
-| `GET <download link>` on an allowed Nexus Mods CDN host (as returned by the request above) | Straight after that, for Premium accounts. Streamed to a temporary `.part` file, then renamed. | none (the file download drops the Authorization header for every host except `api.nexusmods.com`) |
+| `GET <download link>` on an allowed Nexus Mods CDN host (as returned by the request above) | Straight after that, for Premium accounts. Streamed to a temporary `.part` file, then renamed. If a link fails, the next one in the answer is tried (one more request per failed link). | none (the file download drops the Authorization header for every host except `api.nexusmods.com`) |
 | `GET <picture address>` on an allowed Nexus Mods host | For the thumbnails of the cards on screen, and a mod's picture on its page. Pictures that are not shown are not fetched. Up to 12 per page of cards. Kept as textures while the FABRICATOR is open and freed when it closes. | none |
 | `POST https://users.nexusmods.com/oauth/token` | Sign-in (code exchange), and later a refresh when the access token has less than 5 minutes left and COGBox needs it. | client ID in the form body, no secret |
 | `GET https://users.nexusmods.com/oauth/userinfo` | Once, right after sign-in, to show the account name. | `Authorization: Bearer <access token>` |
@@ -97,9 +104,11 @@ to get a `.zip` from the mod's author, or to unpack it and add the folder.
   message or the screen.
 - **Refresh:** when COGBox needs a token and it has less than 5 minutes left, it is refreshed once (refreshes are
   serialised) and a new refresh token is stored. If Nexus Mods refuses the refresh (a 4xx answer other than 408 or 429),
-  COGBox deletes the stored tokens and tells the player they were signed out. If Nexus Mods cannot be reached (5xx or
+  COGBox deletes the stored tokens and tells the player they were signed out (also when it happens during Get or an
+  Update: the action stops with that message instead of falling back to the browser). If Nexus Mods cannot be reached (5xx or
   no answer), the tokens are kept and the action fails with a message.
-- **Sign-out:** a revoke request (best effort), then the tokens are deleted whatever the answer. With Online play off,
+- **Sign-out:** the stored tokens are deleted first, then a revoke request is sent with the copy in memory (best
+  effort; the answer does not matter, and the tokens are already gone if COGBox closes meanwhile). With Online play off,
   the tokens are only deleted.
 - **Client ID:** COGBox has none yet. Until Nexus Mods issues one, the Sign in button is disabled and says "Sign in -
   coming soon", and nothing listens on the port. Browsing and free downloads do not need a sign-in.
@@ -115,12 +124,15 @@ comes back marked adult (a mod whose flag is missing counts as adult), and shows
 These are counts from the design and from a smoke run against the live API, not measurements over many sessions. A
 typical STORE visit:
 
-- Opening the STORE: 4 `Game` requests, 1 or 2 `Mods` requests, up to 12 picture requests. Opening it again in the same
-  run reuses the game IDs.
+- Opening the STORE: 4 `Game` requests, 1 or 2 `Mods` requests, up to 12 picture requests, and, when the player is
+  signed in, 1 `Preferences` request (plus 1 token refresh if the token is within 5 minutes of expiry). Opening it again
+  in the same run reuses the game IDs and the preference.
 - Each further page of cards, search or sort: 1 `Mods` request and up to 12 pictures. Going back to a list seen in the
   last 5 minutes makes no request.
 - Opening a mod: 2 API requests (`Mod`, `ModFiles`) and 1 picture.
-- Getting a file: 0 API requests without Premium; 2 requests (the link, then the file) with Premium.
+- Getting a file: 0 API requests when signed out (the browser does the rest); 1 when signed in without Premium (the
+  link request, answered 403, plus a possible token refresh), then the browser; with Premium, the link request and then
+  the file (plus a possible token refresh, and one more file request for each link that fails).
 - Checking updates: up to 4 `Game` requests (usually already known) and 1 `ModFiles` request per Nexus mod, once per
   press.
 - Signing in: 1 token, 1 userinfo and 1 `Preferences` request. A refresh adds 1 token request when a token is needed
@@ -146,7 +158,9 @@ ID, sign-in is disabled.
 
 Unit tests are in `Gears2-Native/cogbox/test/nexus_api_test.cpp`, `nexus_auth_test.cpp` and `nexus_download_test.cpp`
 (each file's header comment has its build line). They run against a local mock server on 127.0.0.1; the hook that points
-the API at a local server exists only in those test builds.
+the API at a local server exists only in those test builds. The one exception is `nexus_api_test.exe --live`, which
+sends two requests to the real API (`Game` and `Mods` for `gearsofwar3`) with `Application-Version: 0.0.0-test`; it
+runs only when that option is given.
 
 ## What is not done
 

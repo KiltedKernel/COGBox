@@ -614,6 +614,20 @@ static void test_sign_out()
     nexus_sign_out();
     nexus_set_test_base("");
     CHECK(!nexus_load_tokens());
+    // a revoke that hangs: the tokens are already gone while it waits (sign out deletes first)
+    CHECK(nexus_store_tokens(t));
+    MockServer slow;
+    CHECK(slow.start([](const std::string &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        return http_answer(500, "{}");
+    }));
+    std::thread so([] { nexus_sign_out(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    CHECK(!nexus_load_tokens() && !nexus_account().signed_in);   // (mid-revoke)
+    so.join();
+    slow.stop();
+    CHECK(!nexus_load_tokens());
+    CHECK(slow.got().size() == 1);   // the revoke was still sent
 }
 
 static bool cred_exists(const wchar_t *target, DWORD *size)
