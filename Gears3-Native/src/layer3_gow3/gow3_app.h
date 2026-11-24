@@ -7,6 +7,7 @@
 #include <rex/audio/flags.h>
 #include <rex/cvar.h>
 #include <rex/rex_app.h>
+#include <xenos/utf8_paths.h>
 #include "mouse_look.h"
 #include "main_menu_exit.h"
 #include "unlocks.h"
@@ -42,6 +43,7 @@ void Gow3InstallExtras();       // extras.cpp: --gow3_cheats, --gow3_unlock_muta
 void Gow3InstallFirstPerson();  // first_person.cpp: --gow3_first_person (its hotkey)
 void Gow3InstallModChapters();  // mod_chapters.cpp: mods' campaign chapters and content packages
 void Gow3InstallSquadCatchUp();  // squad_catch_up.cpp: the SquadCatchUp adapter ([Campaign] in a mod.ini)
+void Gow3InstallHordeBotCharacters();  // horde_bot_characters.cpp: --gow3_horde_bot_characters, --gow3_log_bot_classes
 void Gow3InstallKismetTraceIfRequested();  // kismet_trace.cpp: developer mode, --mod_kismet_trace
 void Gow3InstallPropLogIfRequested();      // prop_log.cpp: developer mode, --mod_log_props
 REXCVAR_DECLARE(bool, gow3_mute_unfocused);  // extras.cpp
@@ -58,6 +60,8 @@ class Gow3App : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     if (auto ours = XenosCreateOurGpuSystemIfRequested()) config.graphics = std::move(ours);
   }
+  // GitHub #389: path switches with non-ASCII letters, read as UTF-8 (xenos/utf8_paths.h)
+  void OnConfigurePaths(rex::PathConfig& paths) override { xenos::Utf8PathArguments(paths); }
   void OnPostInitLogging() override {
     XenosInstallCrashHandler();
     XenosLogSystemReport("Gears of War 3");  // PC description for problem reports (Gears 2 launcher patch 0131)
@@ -75,6 +79,7 @@ class Gow3App : public rex::ReXApp {
     // before the level and its paused start, so test runs with cheats sat on PAUSED)
     Ue3InstallScriptInputIfRequested(runtime(), gow3::addr::kGNamesVar, gow3::addr::kGObjectsVar);  // developer mode: --cogbox_input_script (ue3/script_input.h)
     Gow3InstallMainMenuExitIfRequested();  // Exit Game: front-end tracking, before the game opens a level
+    Gow3InstallHordeBotCharacters();       // --gow3_horde_bot_characters / --gow3_log_bot_classes (horde_bot_characters.cpp)
     Gow3InstallUnlocks();      // GitHub #174: --gow3_unlock_insane (base disc build)
     Gow3InstallModChapters();  // mods' chapters 32-49 and content packages (mod_chapters.cpp), after their config
     Gow3InstallSquadCatchUp();
@@ -104,7 +109,7 @@ class Gow3App : public rex::ReXApp {
     game_default("gow2_upscale_camera_constant", "5");
     game_default("gow2_renderer_memexport", "true");
     game_default("gow2_renderer_resolution_scale_threshold", "1120");
-    //  - per-object motion vectors for DLSS / FSR / XeSS (#147 / #150): on (Shagg 11-06, tested clean); Gears 1 keeps it off
+    //  - per-object motion vectors for DLSS / FSR (#147 / #150): on (Shagg 11-06, tested clean); Gears 1 keeps it off
     game_default("gow2_upscale_object_motion", "true");
     //  - GitHub #212: the 1344-wide outdoor sun shadow map (pitch 1360) stays 1x - drawn at 2x its shadows were pixelated
     game_default("gow2_renderer_resolution_unscaled_pitches", "1360");
@@ -115,6 +120,21 @@ class Gow3App : public rex::ReXApp {
     //    per frame into the scene depth AFTER the scene colour resolve that runs the upscaler (later lighting passes);
     //    unjittered, whole character triangles lost their lighting under DLSS / FSR. Jittered, the frames are clean.
     game_default("gow2_upscale_jitter_late", "true");
+    // The scene copy is the first 10:10:10:2 UNORM copy (guest format 2) after the camera: the finished scene. The
+    // float scene's mid-frame copies (format 10, for translucency) came first, ~170 lighting passes before the end
+    // (chapter 8's cutscenes); upscaled there, those passes ran at the output scale in Quality / Ultra Performance
+    // against a resampled scene depth and failed their depth-equal test (firelit shadows switching on and off).
+    game_default("gow2_upscale_scene_guest_formats", "2");
+    // At Gears 3's scene copy the scene depth is already overwritten in places (chapter 1: all far plane), so the
+    // upscaler takes it from the frame's last scene-depth copy before it instead (as Judgment does).
+    game_default("gow2_upscale_depth_at_resolve", "true");
+    game_default("gow2_upscale_depth_last_copy", "true");   // the last of its two scene-depth copies
+    // Chapter 1's planar reflection (a mirrored camera, determinant < 0) is never the camera; the real one is > 0.
+    game_default("gow2_upscale_camera_handedness", "1");
+    // Objects are paired with last frame's by their own rows (rotation + translation), not the nearest origin: on
+    // chapter 12's airship the mountains and deck travel with the camera and "danced" under DLSS with real depth
+    // (tested 7 and 18 Nov with --gow2_upscale_depth_at_resolve).
+    game_default("gow2_upscale_object_motion_match", "256");
     //  - XeGTAO (Gears 2 notes/80 s.9, with --gow2_ao=gtao): some Gears 3 levels draw Gears 2's real-time AO chain
     //    (half-res 16_16_FLOAT, ch12) - XeGTAO replaces it at Gears 2's strength; most bake their AO into the lightmaps
     //    and draw none (ch8) - there XeGTAO is added just before the fog pass (this pixel shader, the anchor of
@@ -123,7 +143,8 @@ class Gow3App : public rex::ReXApp {
     game_default("gow2_ao_add_radius", "35");
     game_default("gow2_ao_add_power", "1.6");
     XenosInstallRendererIfRequested(runtime(), {0x1E6883FCCDE1F688ull, 0xA4A965C189287B99ull, 0xB6C9863F710683ECull,
-                                                true /* native HDR profiles (PR #267) */});
+                                                true /* native HDR profiles (PR #267) */, false, false, false,
+                                                true /* native HDR scene blend */});
     Ue3InstallShaderPrebuildIfRequested();  // notes/78: after the renderer (it asks whether the renderer wants them)
     XenosInstallPm4ShadowIfRequested(runtime());
   }

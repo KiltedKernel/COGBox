@@ -24,7 +24,7 @@ ctr_as_local = false
 xer_as_local = false
 reserved_as_local = false
 cr_as_local = true   # job 223: alone ch10 12.47 vs 13.82 ms (-10%); job 225 checks it (shots, 2x, capped)
-non_argument_as_local = false
+non_argument_as_local = false   # speed study 20 Nov (jobs 2175 / 2176): ctr, xer, reserved and this one = true, with tools/localize_fix.py after codegen (cmake/rexglue.cmake runs it), ran clean and measured 4.83 ms a frame against 4.92 (about 2%) in chapter 9 - left off until it has had longer play
 # 0.4.9 (cg049, plan-049-perf item 7): r14-r31 / f14-f31 / v in host locals. docs/scan-049-codegen-safety.md: statically safe,
 # exclusion list empty (no guest unwind/exception resume in this runtime; setjmp/longjmp already non-functional). Job 233: -4 to -5%.
 non_volatile_as_local = true
@@ -354,6 +354,15 @@ address = 0x82817124  # TU6: base 0x828075BC
 name = "Gow2QueryWaitStep"
 registers = []
 
+# Speed study 19 Nov (--gow2_patch_query_buffered, game_patches.cpp): 0x8273116C `addi r4,r29,4` in sub_82730F70, before
+# the occlusion query's release. A query whose answer was not back (sub_828170F0 overridden) stays pending: jump past
+# the release and the re-issue to 0x82731408 with this frame's decision in r25 / r28. TU6 only.
+[[entrypoint.midasm_hook]]
+address = 0x8273116C
+name = "Gow2QueryKeepLate"
+registers = ["r25", "r28", "r29"]
+jump_address_on_true = 0x82731408
+
 # Job 225 (notes/60): the cctpl at 0x829776A0 in sub_82977688 (one step of the XDK's GPU wait). On: skip the (empty)
 # delay loop to the cctpm at 0x829776CC after sleeping until our GPU side writes a fence / the read pointer.
 [[entrypoint.midasm_hook]]
@@ -368,6 +377,18 @@ address = 0x82532380  # TU6: base 0x8252D608
 name = "Gow2UltrawideNoConstrain"
 registers = []
 jump_address_on_true = 0x82532414  # TU6: base 0x8252D69C
+
+# Experiment --gow2_native_lines (game_patches.cpp): the screen width in sub_82816638, at its two stores.
+[[entrypoint.midasm_hook]]
+address = 0x828166F8  # `stw r11,-19644(r10)`: the width when below 1280 (before the store)
+name = "Gow2NativeSceneWidth"
+registers = ["r11"]
+
+[[entrypoint.midasm_hook]]
+address = 0x82816A20  # `li r11,1280`: the width's upper clamp (after it, before its store)
+name = "Gow2NativeSceneWidthMax"
+registers = ["r11"]
+after_instruction = true
 
 # 0x82806B10 `li r11,720`: the scene buffer height (sub_82806A80); f13 holds the aspect factor there.
 [[entrypoint.midasm_hook]]

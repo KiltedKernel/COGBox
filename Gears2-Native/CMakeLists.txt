@@ -18,6 +18,7 @@ include(cmake/rexglue.cmake)
 add_library(gn_layer0_xenos STATIC
     src/layer0_xenos/achievements_data.cpp
     src/layer0_xenos/achievements_export.cpp
+    src/layer0_xenos/window_icon.cpp
     src/layer0_xenos/achievements_popup_logic.cpp
     src/layer0_xenos/achievements_browser_model.cpp
     src/layer0_xenos/achievements_browser.cpp
@@ -35,7 +36,6 @@ add_library(gn_layer0_xenos STATIC
     src/layer0_xenos/latency_reflex.cpp
     src/layer0_xenos/renderer/frame_generation.cpp
     src/layer0_xenos/renderer/dlss_framegen.cpp
-    src/layer0_xenos/renderer/xess_framegen.cpp
     src/layer0_xenos/draw_stats.cpp
     src/layer0_xenos/renderer/d3d12_backend.cpp
     src/layer0_xenos/renderer/vulkan_backend.cpp
@@ -77,6 +77,9 @@ add_library(gn_layer0_xenos STATIC
     src/layer0_xenos/player_tags.cpp  # GitHub #353: the COGBox tags of the players in a match
     src/layer0_xenos/social_page.cpp
     src/layer0_xenos/social_popup.cpp
+    src/layer0_xenos/cheat_popup.cpp
+    src/layer0_xenos/chat_logic.cpp          # in-match chat (Y / U)
+    src/layer0_xenos/chat_panel.cpp
     src/layer0_xenos/social_shared.cpp
     src/layer0_xenos/profiler.cpp
 )
@@ -95,7 +98,7 @@ endif()
 # Our renderer (S3.5): D3D12 + DXGI, ole32 for CoTaskMemFree (DXC version string). DXC is loaded at run time from
 # dxcompiler.dll next to gow2.exe (no import library); only its header comes from third_party.
 set(GN_DEPS_THIRD_PARTY ${CMAKE_SOURCE_DIR}/third_party)
-include(${CMAKE_SOURCE_DIR}/cmake/gn_deps.cmake)   # GN_DXC_DIR, GN_AGILITY_DIR, GN_XESS_DIR (0.4.9)
+include(${CMAKE_SOURCE_DIR}/cmake/gn_deps.cmake)   # GN_DXC_DIR, GN_AGILITY_DIR (0.4.9)
 target_include_directories(gn_layer0_xenos PRIVATE ${GN_DXC_DIR}/inc)
 # Notes/68: the Vulkan backend needs only headers (the loader is opened at run time). Newest first: a Khronos
 # Vulkan-Headers release in third_party/vulkan-headers-v1.4.* (not committed, like the other vendor trees), else the
@@ -146,10 +149,15 @@ add_library(gn_layer2_ue3 STATIC
     src/layer2_ue3/console.cpp  # GitHub #264: engine console commands (--gow2_cheats, --ue3_hotkeys, --ue3_exec); Gears 3 builds it too
     src/layer2_ue3/objects.cpp  # GitHub #245: the engine's objects by name (ue3/objects.h; Gears 2 only - Gears 1 / 3 have their own)
     src/layer2_ue3/name_tags.cpp  # GitHub #353: COGBox tags after the players' names (Gears 1 / 3 / J build it too)
+    src/layer2_ue3/chat.cpp  # in-match chat: Say / TeamSay and the HUD's received lines (Gears 1 / 3 / J build it too)
+    src/layer2_ue3/mod_extras.cpp  # --ue3_mods extras on modcore (KiltedKernel's, shared with Gears 3): mod.ini rules, bare files, config fragments
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Gears3-Native/src/layer2_ue3/modcore/modcore.cpp  # one level up: Gears2-Native and Gears3-Native are siblings (ia10a)
 )
 # console.cpp's options are saved under Gears2 here (Gears 3 keeps its Gears3 group)
 set_source_files_properties(src/layer2_ue3/console.cpp PROPERTIES COMPILE_DEFINITIONS GN_UE3_CONSOLE_GEARS2=1)
 target_include_directories(gn_layer2_ue3 PUBLIC src/layer2_ue3/include)
+# modcore's headers (modcore/modcore.h, modcore/campaigns.h) live next to Gears 3's layer 2
+target_include_directories(gn_layer2_ue3 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../Gears3-Native/src/layer2_ue3)
 target_link_libraries(gn_layer2_ue3 PUBLIC gn_layer1_xdk7645)
 rexglue_apply_target_settings(gn_layer2_ue3)
 
@@ -166,7 +174,9 @@ set(GOW2_SOURCES
     src/layer3_gow2/first_person.cpp  # --gow2_first_person (experimental first-person camera)
 )
 if(WIN32)
-    add_executable(gow2 WIN32 ${GOW2_SOURCES})
+    # GitHub #355: the game's own window / taskbar icon (res/gow2.rc; SDL takes the exe's first icon)
+    enable_language(RC)
+    add_executable(gow2 WIN32 ${GOW2_SOURCES} res/gow2.rc)
 else()
     add_executable(gow2 ${GOW2_SOURCES})
 endif()
@@ -298,8 +308,8 @@ add_custom_command(TARGET gow2 POST_BUILD
         ${CMAKE_SOURCE_DIR}/assets/glyphs $<TARGET_FILE_DIR:gow2>/assets/glyphs
     COMMENT "Copying dxcompiler.dll, dxil.dll, and assets/glyphs next to gow2.exe")
 
-# Upscalers (notes/64, notes/65): DLSS, FSR and XeSS are built in when their SDKs are in third_party (never committed;
-# jobs 250 and 270 download them). GN_WITH_DLSS / GN_WITH_FSR / GN_WITH_XESS switch one off (e.g. if a future SDK does
+# Upscalers (notes/64, notes/65): DLSS and FSR are built in when their SDKs are in third_party (never committed;
+# jobs 250 and 270 download them). GN_WITH_DLSS / GN_WITH_FSR switch one off (e.g. if a future SDK does
 # not link with this toolchain).
 set(GN_DLSS_DIR ${CMAKE_SOURCE_DIR}/third_party/dlss-sdk)
 set(GN_FFX_DIR ${CMAKE_SOURCE_DIR}/third_party/fidelityfx-sdk/Kits/FidelityFX CACHE PATH "AMD FSR SDK Kits/FidelityFX folder (fsr049: -DGN_FFX_DIR=... builds against another copy)")
@@ -311,14 +321,9 @@ set(GN_FFX_FOUND OFF)
 if(WIN32 AND EXISTS ${GN_FFX_DIR}/api/include/ffx_api.h AND EXISTS ${GN_FFX_DIR}/signedbin/amd_fidelityfx_loader_dx12.dll)
     set(GN_FFX_FOUND ON)
 endif()
-set(GN_XESS_FOUND OFF)
-if(WIN32 AND EXISTS ${GN_XESS_DIR}/inc/xess/xess_d3d12.h AND EXISTS ${GN_XESS_DIR}/bin/libxess.dll)
-    set(GN_XESS_FOUND ON)
-endif()
 option(GN_WITH_DLSS "Build NVIDIA DLSS in (needs third_party/dlss-sdk)" ${GN_DLSS_FOUND})
 option(GN_WITH_FSR "Build AMD FSR in (needs third_party/fidelityfx-sdk)" ${GN_FFX_FOUND})
-option(GN_WITH_XESS "Build Intel XeSS in (needs third_party/xess-sdk)" ${GN_XESS_FOUND})
-message(STATUS "Gears2-Native: upscalers - DLSS ${GN_WITH_DLSS} (SDK found: ${GN_DLSS_FOUND}), FSR ${GN_WITH_FSR} (SDK found: ${GN_FFX_FOUND}), XeSS ${GN_WITH_XESS} (SDK found: ${GN_XESS_FOUND})")
+message(STATUS "Gears2-Native: upscalers - DLSS ${GN_WITH_DLSS} (SDK found: ${GN_DLSS_FOUND}), FSR ${GN_WITH_FSR} (SDK found: ${GN_FFX_FOUND})")
 # Patch 0135: NVIDIA Reflex through NVAPI (github.com/NVIDIA/nvapi), in third_party/nvapi when a job has downloaded it.
 set(GN_NVAPI_DIR ${CMAKE_SOURCE_DIR}/third_party/nvapi)
 set(GN_NVAPI_FOUND OFF)
@@ -394,34 +399,6 @@ if(GN_WITH_FSR AND GN_FFX_FOUND)
             ${GN_FFX_DIR}/signedbin/amd_fidelityfx_upscaler_dx12.dll
             ${GN_FFX_DIR}/signedbin/amd_fidelityfx_framegeneration_dx12.dll $<TARGET_FILE_DIR:gow2>
         COMMENT "Copying the FidelityFX loader, upscaler and frame-generation DLLs next to gow2.exe")
-endif()
-if(GN_WITH_XESS AND GN_XESS_FOUND)
-    target_sources(gn_layer0_xenos PRIVATE src/layer0_xenos/renderer/xess_upscaler.cpp)
-    target_compile_definitions(gn_layer0_xenos PRIVATE GN_HAVE_XESS)
-    target_include_directories(gn_layer0_xenos PRIVATE ${GN_XESS_DIR}/inc)
-    # No import library: xess_upscaler.cpp loads libxess.dll when XeSS is chosen, so the exe starts without it.
-    add_custom_command(TARGET gow2 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GN_XESS_DIR}/bin/libxess.dll $<TARGET_FILE_DIR:gow2>
-        COMMENT "Copying libxess.dll next to gow2.exe")
-endif()
-# 0.4.9 (xefg049): Intel XeSS frame generation + XeLL (renderer/xess_framegen.cpp, --gow2_frame_generation=xess,
-# experimental, DirectX 12 only), from the same XeSS 3 SDK folder (xess_fg + xell headers, libxess_fg.dll, libxell.dll).
-# No import libraries: both DLLs are loaded at run time when the player picks it. Intel Simplified Software License:
-# redistributable unmodified with its notice (THIRD_PARTY_NOTICES.md). Without them the file builds as stubs.
-set(GN_XEFG_FOUND OFF)
-if(WIN32 AND EXISTS ${GN_XESS_DIR}/inc/xess_fg/xefg_swapchain_d3d12.h AND EXISTS ${GN_XESS_DIR}/inc/xell/xell_d3d12.h
-   AND EXISTS ${GN_XESS_DIR}/bin/libxess_fg.dll AND EXISTS ${GN_XESS_DIR}/bin/libxell.dll)
-    set(GN_XEFG_FOUND ON)
-endif()
-option(GN_WITH_XEFG "Build Intel XeSS frame generation in (needs the XeSS 3 SDK with xess_fg / xell)" ${GN_XEFG_FOUND})
-message(STATUS "Gears2-Native: Intel XeSS frame generation ${GN_WITH_XEFG} (SDK found: ${GN_XEFG_FOUND})")
-if(GN_WITH_XEFG AND GN_XEFG_FOUND)
-    target_compile_definitions(gn_layer0_xenos PRIVATE GN_HAVE_XEFG)
-    target_include_directories(gn_layer0_xenos PRIVATE ${GN_XESS_DIR}/inc)
-    add_custom_command(TARGET gow2 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GN_XESS_DIR}/bin/libxess_fg.dll ${GN_XESS_DIR}/bin/libxell.dll
-            $<TARGET_FILE_DIR:gow2>
-        COMMENT "Copying libxess_fg.dll and libxell.dll next to gow2.exe")
 endif()
 
 # Unit tests (Catch2 from third_party, decision D17). Game-free; build\<config>\gn_tests.exe runs them.
@@ -544,3 +521,9 @@ if(WIN32)
     target_link_libraries(gn_pipebench PRIVATE gn_layer0_xenos)
     rexglue_apply_target_settings(gn_pipebench)
 endif()
+
+# 0.6.6: Intel's upscaler DLLs are no longer built in or shipped. A build folder made before that still holds the
+# copies an older build put there; the packager refuses a folder that has them, so every build removes them.
+add_custom_command(TARGET gow2 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE_DIR:gow2>/libxess.dll $<TARGET_FILE_DIR:gow2>/libxess_fg.dll $<TARGET_FILE_DIR:gow2>/libxell.dll
+    COMMENT "Removing leftover Intel upscaler DLLs from the build folder")

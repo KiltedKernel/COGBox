@@ -8,6 +8,7 @@
 #include <rex/audio/flags.h>
 #include <rex/cvar.h>
 #include <rex/rex_app.h>
+#include <xenos/utf8_paths.h>
 #include "mouse_look.h"
 #include "main_menu_exit.h"
 #include "profile_log.h"
@@ -63,6 +64,8 @@ class GowjApp : public rex::ReXApp {
   // XenosLogSystemReport (Gears 2 launcher patch 0131, layer 0 system_report.cpp, picked up by our layer 0 glob): one
   // read-only report of Windows / CPU / memory / graphics cards + drivers / screens / controllers / build, for problem
   // reports.
+  // GitHub #389: path switches with non-ASCII letters, read as UTF-8 (xenos/utf8_paths.h)
+  void OnConfigurePaths(rex::PathConfig& paths) override { xenos::Utf8PathArguments(paths); }
   void OnPostInitLogging() override {
     XenosInstallCrashHandler();
     XenosLogSystemReport("Gears of War: Judgment");
@@ -94,7 +97,7 @@ class GowjApp : public rex::ReXApp {
     // default, so a command line, config file or environment variable always wins:
     //  - memexport: Judgment's vertex shaders write guest memory like Gears 3's (job 009 gameplay: "skipped 90: vertex
     //    shader memexport", rainbow skin; Gears 3 job 042 fixed the same look). Job 010 (10:57) confirmed: the menus route is clean with it.
-    //  - DLSS / FSR / XeSS (Shagg 20:53 "Just make them work please"): Gears 3's values, which job 019 C verified on
+    //  - DLSS / FSR (Shagg 20:53 "Just make them work please"): Gears 3's values, which job 019 C verified on
     //    Judgment (every frame upscaled, camera found every frame, the object vote agreed, clean shots). An object's
     //    object-to-world rows are in c7-c10, the camera's world position is in c5, and the lit scene is 10:10:10:2 UNORM.
     //    Gears 2 job 487 log: "camera 0 msaa 0 format 1 (scene needs 2)". Without these the upscaler never started.
@@ -109,15 +112,25 @@ class GowjApp : public rex::ReXApp {
     // Gears 2 notes/80 s.11: the upscalers take the frame's last scene copy, not the first of the mid-frame copies for
     // translucency, which was ~480 draws early: Ultra Performance added the rest at 720p, unjittered.
     game_default("gow2_upscale_scene_last_copy", "true");
+    // ...and, once a frame has drawn the fog pass, only a copy after it: a mid-frame copy before the fog on some frames
+    // (what is visible decides) was taken instead, leaving XeGTAO's AO (added at the fog) out: a one-frame flash.
+    game_default("gow2_upscale_scene_after_fog", "true");
     // Gears 2 notes/80 s.6: the upscalers' depth copied at the scene depth resolve - by the scene colour copy the game has
     // reused that EDRAM, and DLSS got one depth for the whole frame (distant edges broke up; captured 2026-11-04).
     game_default("gow2_upscale_depth_at_resolve", "true");
+    game_default("gow2_upscale_depth_last_copy", "true");   // the last of its two scene-depth copies (the first holds part of the scene)
     // Gears 2 notes/81: with --gow2_ao=gtao, ours goes in before the fog pass, the same shader as Gears 3's. The launcher
     // turns Judgment's own AO off with AmbientOcclusion=False.
     game_default("gow2_ao_fog_ps", "724AB5F143DBBFD4");
     game_default("gow2_renderer_memexport", "true");
+    // Blood decals, and the light passes drawn over a surface, flickered off as the camera moved (worst with DLSS): no
+    // depth write and a greater-or-equal test against the floor's own depth, which rounds the same on the console but
+    // not here. The decal offset raised to 0.01 as Gears 1 does (job 713), and - new for Judgment - those draws nudged
+    // 2 float24 steps toward passing (job 712's switch, off in every other game).
+    game_default("gow2_renderer_decal_min_bias", "0.01");
+    game_default("gow2_renderer_overlay_depth_nudge", "2");
     game_default("gow2_renderer_resolution_scale_threshold", "1120");
-    //  - per-object motion vectors for DLSS / FSR / XeSS (#147 / #150): on (Shagg 11-06, tested clean); Gears 1 keeps it off
+    //  - per-object motion vectors for DLSS / FSR (#147 / #150): on (Shagg 11-06, tested clean); Gears 1 keeps it off
     game_default("gow2_upscale_object_motion", "true");
     //  - first-visit freezes: the DXBC shader path (shaders ready at once; HLSL spent 221 s of compiler time on University's
     //    first visit, job 017). Holding / waiting for pipelines is layer 0's call: since Gears 2 patch 0132 (Shagg 21:46-22:07,

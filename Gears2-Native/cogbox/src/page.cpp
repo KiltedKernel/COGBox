@@ -11,6 +11,7 @@
 #include "dlss_custom.h"   // 0.4.9: Custom DLSS file
 #include "save_import.h"   // 0.6.1: Import saves
 #include "fabricator_state.h"   // the MODS tab's "More in FABRICATOR" (the LIBRARY opens on this game)
+#include "mod_conflicts.h"   // the MODS tab's note under a mod that shares files with another
 #include <filesystem>
 #include "imgui_internal.h"
 
@@ -34,7 +35,6 @@ static const HelpTest k_helpTest[] = {
     // Shagg 6 Nov: never ask players to do extra work to find data for us - at most "press Report a problem".
     { 2,  "Sudden death / \"cursed\" save, or a teammate killing you (#55, #68, #79, #80): if it happens to you, press Report a problem afterwards - the report has what we need." },
     { 2,  "Raam's Shadow DLC not found (#79): if the game doesn't see your DLC, press Report a problem after that start." },
-    { 15, "System Link - LAN play (experimental, #72): if you try it, tell us in a ticket on GitHub whether it worked." },
     { 15, "Other versions of the game (regional discs, other title updates): if yours isn't the one COGBox expects, tell us whether it works." },
 };
 
@@ -237,6 +237,7 @@ void env_refresh(App &a, int g)
     e.gpu_name = gs::main_gpu(a.gpus);
     e.graphics_cards.clear();   // 0.6.2 (GitHub #304)
     for (const GpuCard &c : a.gpuCards) e.graphics_cards.push_back(c.name);
+    e.audio_devices = a.audioDevices;   // GitHub #425
     int n = 0;
     SDL_DisplayID *ids = SDL_GetDisplays(&n);
     e.screen_count = std::max(1, n);
@@ -339,7 +340,7 @@ void env_refresh(App &a, int g)
     e.cap.exe_has = memo(exe);
     e.cap.runtime_has = memo(runtime_dll(exe));
     // beside the exe, or in the release's shared folder (<COGBox>\shared), which play.cpp puts on the game's PATH: the
-    // FSR / XeSS / frame generation DLLs live there in the release zip
+    // FSR / frame generation DLLs live there in the release zip
     e.cap.file_next_to_exe = [exe, m = std::make_shared<std::unordered_map<std::string, bool>>()](const std::string &name) {
         if (exe.empty()) return false;
         auto it = m->find(name);
@@ -367,10 +368,13 @@ bool settings_save(App &a, int prefer)
         gs::sync_shared(a.store, a.env, a.cur, a.dirty, prefer >= 0 ? prefer : a.page, changed);
         for (int g = 0; g < G_COUNT; g++) if (changed[g]) env_refresh(a, g);   // (Monitor is Shared)
     }
+    bool was[G_COUNT] = {};
     for (int g = 0; g < G_COUNT; g++)
-        if (a.dirty[g]) { a.store.commit((gs::Game)g, a.cur[g], a.env[g]); a.dirty[g] = false; }
+        if (a.dirty[g]) { a.store.commit((gs::Game)g, a.cur[g], a.env[g]); a.dirty[g] = false; was[g] = true; }
     a.store.last_game = a.page;
     bool ok = write_file(join(exe_dir(), "settings.ini"), a.store.save_ini());
+    // 0.6.6 (review #20): a failed write leaves the pages unsaved, so the next save (and the one on exit) tries again
+    if (!ok) for (int g = 0; g < G_COUNT; g++) if (was[g]) a.dirty[g] = true;
     if (!ok) set_message(a, "The settings couldn't be saved - is the COGBox folder read-only?", true);
     a.saves++;   // 0.6.3 r48: the controller layout's Undo lasts until a save
     return ok;
@@ -383,15 +387,27 @@ static float g_labelW, g_ctrlW, g_rowX1;
 static float row_wrap_x() { return g_rowX1 - ImGui::GetWindowPos().x + ImGui::GetScrollX(); }
 static const float k_rowText = 1.1f;    // the rows' text, bigger than the body font (Shagg 21:44: hard to read)
 
+// 0.6.5 (Shagg, the two-column tabs): a label longer than the room before its control (g_labelW) wraps onto more
+// lines there - never under the control - and the control sits in the middle of those lines.
+static float g_labelBottom;   // the last row label's bottom (screen y): a row's hover area reaches it (option_row)
 static void row_label(const char *label, const std::string &desc, bool enabled)
 {
     label = tr(label);   // 0.2.0
+    const float y0 = ImGui::GetCursorPosY();
     ImGui::AlignTextToFramePadding();
+    const float room = g_labelW - S(12);
+    const bool wrap = room > S(80);   // a very narrow window: one line as before, not one word per line
+    if (wrap) ImGui::PushTextWrapPos(room);
     ImGui::PushStyleColor(ImGuiCol_Text, enabled ? col::text : col::faint);
     ImGui::TextUnformatted(label);
     ImGui::PopStyleColor();
+    if (wrap) ImGui::PopTextWrapPos();
     if (!desc.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", desc.c_str());
+    g_labelBottom = ImGui::GetItemRectMax().y;
+    const float h = ImGui::GetItemRectSize().y, frame = ImGui::GetFrameHeight();
     ImGui::SameLine(g_labelW);
+    // more than one line: the control in the middle of them (the text starts FramePadding.y down, as a control's does)
+    if (h > frame + 1.0f) ImGui::SetCursorPosY(y0 + ImGui::GetStyle().FramePadding.y + (h - frame) * 0.5f);
 }
 
 // ---- 0.4.6 (Shagg 5 Nov 18:07: "the whole launcher aesthetically streamlined and simple") - one visual system for
@@ -431,6 +447,11 @@ void ui_columns(const std::function<void(int)> &body)   // (also achievements_ta
     const float keepLabel = g_labelW, keepX1 = g_rowX1;
     const int keepSections = g_sections;
     float bottom = ImGui::GetCursorScreenPos().y;
+    // each pair of columns on a page its own child windows: the same names twice in one window would be the same
+    // windows, so a second block (the Achievements tab's Sort / Show) would be drawn into the first (its popup settings)
+    static int frame = -1, block = 0;
+    if (frame != ImGui::GetFrameCount()) { frame = ImGui::GetFrameCount(); block = 0; }
+    ImGui::PushID(block++);
     for (int side = 0; side < 2; side++) {
         if (side) ImGui::SameLine(0, gap);
         ImGui::BeginChild(side ? "##colR" : "##colL", ImVec2(colW, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened,
@@ -439,9 +460,11 @@ void ui_columns(const std::function<void(int)> &body)   // (also achievements_ta
         g_rowX1 = ImGui::GetCursorScreenPos().x + colW - S(4);
         g_sections = keepSections;
         body(side);
+        ImGui::Dummy(ImVec2(0, S(3)));   // room under the last row: a child sized to its content clips that row's border
         ImGui::EndChild();
         bottom = std::max(bottom, ImGui::GetItemRectMax().y);
     }
+    ImGui::PopID();
     g_labelW = keepLabel; g_rowX1 = keepX1;
     g_sections = keepSections + 1;
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x - ImGui::GetScrollX(), bottom));
@@ -453,16 +476,24 @@ float ui_row_x1() { return g_rowX1; }
 // ui_section / ui_note / ui_columns work there as on a page
 void ui_rows_begin()
 {
-    g_ctrlW = T(300);
+    g_ctrlW = T(270);   // 0.6.5 (Shagg): 10% narrower than the first two-column build
     g_labelW = std::min(S(500), ImGui::GetContentRegionAvail().x - g_ctrlW - S(40));
     g_rowX1 = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x - S(16);
     g_sections = 0;
+}
+
+// 0.6.5: after a SameLine, the next item (w wide) goes to the next line when the window has no room left for it.
+static void wrap_if_no_room(float w)
+{
+    const float x = ImGui::GetCursorPosX();
+    if (x > ImGui::GetCursorStartPos().x + 1.0f && x + w > row_wrap_x()) ImGui::NewLine();   // not at the start of a line
 }
 
 static bool small_button(const char *label_en)
 {
     const char *label = tr(label_en);
     const float w = std::max(T(90), F_BODY->CalcTextSizeA(FS(F_BODY), FLT_MAX, 0, label).x + S(28));
+    wrap_if_no_room(w);   // 0.6.5: a row of buttons wraps in a column instead of running past its edge
     return th_button(label, ImVec2(w, T(26)), true, F_BODY);
 }
 
@@ -646,6 +677,7 @@ static void prepare_section(App &a, int g)
         if (!ok) ImGui::BeginDisabled();
         if (small_button("Prepare all shaders now")) {
             settings_save(a);
+            a.prepThenPlay[g] = false;   // (review r91897: a manual run never starts the game afterwards)
             play_start(a, g, true);
         }
         if (!ok) ImGui::EndDisabled();
@@ -922,9 +954,7 @@ static void pad_layout_section(App &a, int g)
     };
     for (int i = 0; i < gs::kPadInputs; i++) {
         ImGui::PushID(i);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(pad_button_name(a, i).c_str());
-        ImGui::SameLine(g_labelW);
+        row_label(pad_button_name(a, i).c_str(), "", true);
         std::string shown;
         for (int b : gs::pad_sources(m, i)) shown += (shown.empty() ? "" : " / ") + pad_button_name(a, b);
         if (shown.empty()) shown = tr("Nothing");
@@ -1061,8 +1091,9 @@ static void option_row(App &a, int g, const gs::Option &o)
         // included: 4K picks 3x) only anti-aliases - said in the list and the closed box
         if (o.id == "SceneMode" && items.size() == 4) {
             const int out = gs::expected_render_scale((gs::Game)g, a.cur[g], a.env[g]);
+            const bool p1080 = gs::performance_1080_base((gs::Game)g, a.cur[g], a.env[g]);   // 4K + Performance
             for (int i = 1; i < 4; ++i)
-                if (!gs::scene_mode_fits(i, out)) items[i] += std::string(" - ") + tr("anti-aliasing only at this render resolution");
+                if (!gs::scene_mode_fits(i, out, p1080)) items[i] += std::string(" - ") + tr("anti-aliasing only at this render resolution");
         }
         // 0.6.2 Proton review (R11): settings from Windows say DirectX 12, but "Graphics API on Proton / Wine" = Automatic
         // runs Vulkan - the closed box says what the game will actually run
@@ -1073,13 +1104,20 @@ static void option_row(App &a, int g, const gs::Option &o)
             // 0.2.1: Render resolution lists 1080p in size order; the saved value is still the original index
             std::vector<int> ord;
             for (int i = 0; i < (int)items.size(); i++) ord.push_back(i);
-            if (o.id == "Resolution" && items.size() == 6) ord = { 0, 5, 1, 2, 3, 4 };
+            if (o.id == "Resolution" && items.size() == 8) ord = { 0, 6, 7, 5, 1, 2, 3 };   // 0.6.6: Match my monitor (4) no longer offered; #436: 768p / 900p by size
+            if (o.id == "WindowSize" && items.size() == 7) ord = { 0, 1, 6, 2, 3, 4, 5 };   // GitHub #436: 1366 x 768 by size
+            if (o.id == "AO" && items.size() == 5) ord = { 0, 1, 2 };   // 0.6.7: Off / Default / On (GitHub #406; 0.6.6 had dropped Off)
+            if (o.id == "AAMode" && items.size() == 6) ord = { 0, 1, 2, 3, 5 };       // 0.6.6: choice 4 dropped
             for (int i : ord) {
                 if (o.id == "FrameGen" && i != idx && gs::framegen_choice_hidden(i, a.env[g])) continue;   // NVIDIA DLSS FG: only with its DLLs
                 gs::Availability ca = gs::choice_available(o, G, i);
                 if (ca.ok) ca = gs::wine_choice_available(o, i, a.env[g]);   // proton049: what can't work under Proton (ok on Windows)
                 if (ca.ok && o.id == "FrameGen") ca = gs::framegen_choice_available(i, a.env[g], gs::runs_vulkan(a.cur[g], a.env[g]));
-                // 0.3.0 (Shagg 14:18): FSR / DLSS / XeSS are DirectX 12 only - greyed while Vulkan is the Graphics API
+                // 0.6.6: a Scene resolution with no whole-number scene size here is greyed, with the reason (hover)
+                if (ca.ok && o.id == "SceneMode" && i != idx)
+                    ca = gs::scene_mode_choice_available(i, gs::expected_render_scale((gs::Game)g, a.cur[g], a.env[g]),
+                                                         gs::performance_1080_base((gs::Game)g, a.cur[g], a.env[g]));
+                // 0.3.0 (Shagg 14:18): FSR / DLSS are DirectX 12 only - greyed while Vulkan is the Graphics API
                 if (ca.ok && o.id == "AAMode" && i >= 2 && i <= 4 && gs::runs_vulkan(a.cur[g], a.env[g]) && !(i == 2 && gs::fsr_vulkan_on(a.cur[g], a.env[g]))) {   // 5 SMAA T2x: both APIs; fsr049: FSR on Vulkan (opt-in)
                     ca.ok = false;
                     ca.why = i == 2 ? (gs::fsr_vulkan(a.env[g]) ? "FSR on Vulkan is experimental - turn on \"FSR on Vulkan (experimental)\" to use it; otherwise the launcher uses SMAA."
@@ -1153,6 +1191,30 @@ static void option_row(App &a, int g, const gs::Option &o)
             }
             break;
         }
+        if (o.id == "AudioDevice") {
+            // GitHub #425: a list of the PC's sound output devices, by name. System default = nothing saved (the game follows
+            // Windows' default device). A saved device that isn't plugged in shows as missing and is not sent.
+            const std::string cur = a.cur[g].str(o.id);
+            std::string preview = tr("System default");
+            if (!cur.empty())   // an empty list (SDL's audio didn't start) says nothing about the device
+                preview = a.env[g].audio_devices.empty() || gs::audio_device_present(a.env[g], cur)
+                              ? cur : cur + " " + tr("(not found - the system default is used)");
+            if (ImGui::BeginCombo("##v", preview.c_str())) {
+                if (ImGui::Selectable(tr("System default"), cur.empty())) { if (!cur.empty()) { a.cur[g].t[o.id] = std::string(); a.dirty[g] = true; } }
+                for (const std::string &name : a.audioDevices) {
+                    ImGui::PushID(name.c_str());
+                    const std::string clean = gs::sanitize_text(o, name);   // as it is saved
+                    const bool sel = !cur.empty() && _stricmp(clean.c_str(), cur.c_str()) == 0;
+                    if (ImGui::Selectable(name.c_str(), sel)) {
+                        if (clean != cur) { a.cur[g].t[o.id] = clean; a.dirty[g] = true; }
+                    }
+                    ImGui::PopID();
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            break;
+        }
         // 0.4.8 (GitHub #229): a one-line text box. Only the option's characters can be typed (gs::text_char_ok) and at
         // most max_len; the value kept is gs::sanitize_text's (what isn't valid is dropped and said so under the row).
         static char buf[512];
@@ -1187,6 +1249,20 @@ static void option_row(App &a, int g, const gs::Option &o)
     if (!av.ok) ImGui::EndDisabled();
     if (o.id == "FrameGen" && av.ok && gs::fg_vk_nvidia_warning(a.cur[g], a.env[g]))   // vkfreeze049
         ui_note(gs::k_fgVkNvidiaWarning, col::amber);
+    // #345 (Shagg 17 Nov): a Scene resolution the render resolution can't divide only anti-aliases - say so under the
+    // setting, with what to pick instead (4K "Match my monitor" draws at 3x, where Performance runs as DLAA)
+    if (o.id == "SceneMode" && av.ok && v >= 1 && v <= 3) {
+        const int aa = a.cur[g].i("AAMode");
+        const int out = gs::expected_render_scale((gs::Game)g, a.cur[g], a.env[g]);
+        if (aa >= 2 && aa <= 4 && !gs::scene_mode_fits((int)v, out, gs::performance_1080_base((gs::Game)g, a.cur[g], a.env[g])))
+            ui_note(v == 2 ? (out == 3 ? "At this render resolution (3x) Performance keeps the scene at full size, so the upscaler only "
+                                         "anti-aliases (no extra frames). Pick Quality or Ultra performance, or a 2x render resolution."
+                                       : "At this render resolution Performance keeps the scene at full size, so the upscaler only "
+                                         "anti-aliases (no extra frames). Performance needs a 2x or 4x render resolution.")
+                           : "At this render resolution this choice keeps the scene at full size, so the upscaler only anti-aliases "
+                             "(no extra frames). Quality and Ultra performance need a 3x render resolution (4K).",
+                    col::amber);
+    }
     if (changed && nv != v) {
         // 0.6.3: Custom chosen with no custom layout saved yet starts from the layout that was chosen (Southpaw ...)
         const bool seed = o.id == "PadLayout" && (int)nv == 4 && v >= 1 && v <= 3 && a.ini.get("Pad", "Remap").empty();
@@ -1197,7 +1273,7 @@ static void option_row(App &a, int g, const gs::Option &o)
         if (o.id == "Version" || o.id == "Monitor") env_refresh(a, g);
     }
     // the description as a tooltip: the mouse resting on the row (label or control) for a second (greyed rows lead with why)
-    ImVec2 rowB(g_rowX1, ImGui::GetItemRectMax().y);
+    ImVec2 rowB(g_rowX1, std::max(ImGui::GetItemRectMax().y, g_labelBottom));   // 0.6.5: a wrapped label's last line too
     static ImGuiID tipRow = 0;
     static double tipSince = 0;
     ImGuiID id = ImGui::GetID("row");
@@ -1219,6 +1295,12 @@ static void option_row(App &a, int g, const gs::Option &o)
         const std::string cur = a.cur[g].str(o.id);
         if (!cur.empty() && !gs::graphics_card_present(a.env[g], cur))
             ui_note("The graphics card you chose is not in this PC at the moment - the game picks its card itself (Automatic).", col::amber);
+    }
+    // GitHub #425: a device saved before that isn't plugged in now (or another PC's) - say so, and what happens
+    if (av.ok && o.id == "AudioDevice") {
+        const std::string cur = a.cur[g].str(o.id);
+        if (!cur.empty() && !a.env[g].audio_devices.empty() && !gs::audio_device_present(a.env[g], cur))
+            ui_note("The output device you chose is not plugged in at the moment - the game uses the system default device.", col::amber);
     }
     // GitHub #90: a language saved before (or from another copy) that this copy doesn't have - say so before the launch,
     // with what the game uses instead (the launcher doesn't pass it, gears_settings build_args)
@@ -1366,11 +1448,13 @@ static AutoPlan auto_plan(App &a, int g)
     p.tier = integrated || deck ? 0 : (p.vramMB >= 10240 || (p.vramMB >= 8000 && modern)) ? 2 : p.vramMB >= 5800 ? 1 : 0;
     const int hz = a.env[g].refresh_hz;
     const int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    // Render resolution: 0 = 1x, 1 = 2x, 4 = match my monitor, 5 = 1080p (720p upscaled)
-    int res = p.tier == 2 ? 4 : p.tier == 1 ? (sh <= 1440 ? 4 : 1) : (sw >= 1920 ? 5 : 0);
+    // Render resolution: 0 = 1x, 1 = 2x, 2 = 3x, 5 = 1080p (720p upscaled). 0.6.6: no "Match my monitor" - a whole
+    // scale is named. High end: 2x up to a 1440p screen, 3x above. Mid range: the 1080p mode on a 1080p screen (2x there
+    // is 1440p drawn and shrunk - GitHub #388, an RTX 2070 at 46 fps), else 2x.
+    int res = p.tier == 2 ? (sh <= 1440 ? 1 : 2) : p.tier == 1 ? (sh <= 1080 ? 5 : 1) : (sw >= 1920 ? 5 : 0);
     // Frame rate limit (FrameCap indices): 0 = 30, 2 = 45, 3 = 60, 5 = 120. Job 638: the Steam Deck gets 45.
     int fps = p.tier == 2 ? (hz >= 115 ? 5 : 3) : p.tier == 1 ? (hz >= 115 ? 5 : 3) : (deck ? 2 : 3);
-    if (p.tier == 1 && res == 4 && sh > 1080) fps = 3;   // mid cards at native 1440p: 60
+    if (p.tier == 1 && res == 1 && sh > 1080) fps = 3;   // mid cards at 1440p: 60
     int pool = p.vramMB >= 8000 ? 2 : 1;                   // Large (256 MB) / Standard
     p.set = { { "AAMode", 1 }, { "Resolution", res }, { "FrameCap", fps }, { "Vsync", 1 }, { "Pool", pool },
               { "Aniso", p.tier >= 1 ? 1 : 0 }, { "Trilinear", 1 }, { "FrameGen", 0 }, { "Preset", 3 } };
@@ -1405,7 +1489,7 @@ void auto_settings_apply(App &a, int g)
 // 0.4.6 (Shagg 5 Nov): mods have their own tab (they were a section of About)
 static void mods_tab(App &a, int g)
 {
-    bool running = a.run.proc != nullptr;
+    bool running = a.run.proc != nullptr || any_game_exe_running();   // review r369: a game started outside COGBox too
     // 0.2.0: mods - <Game>\mods\<mod>\, laid out like the game's data folder; a later one wins
     ui_section("MODS");
     {
@@ -1417,6 +1501,13 @@ static void mods_tab(App &a, int g)
         if (ml[g].empty()) { lamp_line(0, "No mods yet"); ui_tip(k_noModsTip); }
         bool changed = false;
         const float bw = T(90);   // Up / Down: one column at the right, the same size
+        {   // review: the tab opened (or another game's) - the mods' folders listed again for the conflicts
+            static int s_frame = -10, s_game = -1;
+            if (ImGui::GetFrameCount() - s_frame > 1 || g != s_game) mod_conflicts_refresh(g);
+            s_frame = ImGui::GetFrameCount();
+            s_game = g;
+        }
+        const std::shared_ptr<const ModConflictSet> conflicts = mod_conflicts_get(g);
         for (size_t i = 0; i < ml[g].size(); i++) {
             const ModItem &m = ml[g][i];
             ImGui::PushID((int)i + 8000);
@@ -1443,6 +1534,35 @@ static void mods_tab(App &a, int g)
             if (m.textures) lamp_line(m.enabled ? 1 : 0, m.textures == 1 ? tr(std::string("Texture pack: 1 texture"))
                                                                          : trf("Texture pack: {1} textures", { std::to_string(m.textures) }));
             for (const std::string &n : m.notes) ui_note("mod.ini: " + n, col::amber);
+            // KiltedKernel: the files it shares with other ticked mods (mod_conflicts.h) - the first, how many more, and
+            // all of them with their paths on hover (the FABRICATOR's LIBRARY has a line each)
+            if (const ModConflicts *c = m.enabled && conflicts ? conflicts->find(m.folder) : nullptr) {
+                std::vector<std::pair<const ModConflictPair *, int>> v;
+                for (const ModConflictPair &p : c->replaced_by) v.push_back({ &p, 0 });
+                for (const ModConflictPair &p : c->tex_loses) v.push_back({ &p, 2 });
+                for (const ModConflictPair &p : c->replaces) v.push_back({ &p, 1 });
+                for (const ModConflictPair &p : c->tex_wins) v.push_back({ &p, 3 });
+                if (!v.empty()) {
+                    std::string t = mod_conflict_text(*v[0].first, v[0].second);
+                    if (v.size() > 1) t += "  " + trf("(+{1} more)", { std::to_string(v.size() - 1) });
+                    lamp_line(2, t);   // (an amber lamp, as the tab's other lines about a mod)
+                    if (ImGui::IsItemHovered()) {   // file names: TextUnformatted only
+                        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(S(640), FLT_MAX));
+                        ImGui::BeginTooltip();
+                        const size_t kMax = 6;   // (then "and N more": the LIBRARY has a line each)
+                        for (size_t k = 0; k < v.size() && k < kMax; k++) {
+                            if (k) ImGui::Dummy(ImVec2(0, S(4)));
+                            ImGui::TextUnformatted(mod_conflict_text(*v[k].first, v[k].second).c_str());
+                            for (const std::string &x : mod_conflict_tip(*v[k].first, v[k].second)) ImGui::TextUnformatted(x.c_str());
+                        }
+                        if (v.size() > kMax) {
+                            ImGui::Dummy(ImVec2(0, S(4)));
+                            ImGui::TextUnformatted(trf("and {1} more - see the FABRICATOR's LIBRARY", { std::to_string(v.size() - kMax) }).c_str());
+                        }
+                        ImGui::EndTooltip();
+                    }
+                }
+            }
             ImGui::PopID();
         }
         ImGui::Dummy(ImVec2(0, S(4)));
@@ -1613,15 +1733,37 @@ static void about_tab(App &a, int g)
         // GitHub #283: a package another installed one already covers (same files, same contents) is marked
         const bool dup = !dl[i].dupOfName.empty();
         dupes += dup;
-        lamp_line(dup ? 2 : 1, dl[i].title + (dl[i].title != dl[i].name ? "  (" + dl[i].name + ")" : "") +
-                                   (dup ? "  -  duplicate of \"" + dl[i].dupOf + "\" - can be removed" : ""),
-                  dup ? "Everything in this package is also in the other one, with the same contents, so the game gets the same items twice "
-                        "(for example the same skin twice). Removing it removes only COGBox's unpacked copy - your package file is not touched." : "");
-        ImGui::SameLine();
+        // 0.6.5 (Shagg): the name on one line, its package id under it, and Remove at the right in the middle of the two
+        const char *remove = tr("Remove");
+        const float bw = std::max(T(90), F_BODY->CalcTextSizeA(FS(F_BODY), FLT_MAX, 0, remove).x + S(28)), bh = T(26);
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        const float lineH = ImGui::GetTextLineHeight();
+        th_lamp(ImGui::GetWindowDrawList(), ImVec2(p0.x + S(6), p0.y + lineH * 0.55f), S(4.5f), dup ? 2 : 1);
+        ImGui::SetCursorScreenPos(ImVec2(p0.x + S(20), p0.y));
+        ImGui::BeginGroup();
+        ImGui::PushTextWrapPos(row_wrap_x() - bw - S(12));
+        ImGui::TextUnformatted(tr(dl[i].title + (dup ? "  -  duplicate of \"" + dl[i].dupOf + "\" - can be removed" : "")).c_str());
+        if (dl[i].title != dl[i].name) {
+            ImGui::PushFont(F_SMALL, FS(F_SMALL));
+            ImGui::PushStyleColor(ImGuiCol_Text, col::dim);
+            ImGui::TextUnformatted(("(" + dl[i].name + ")").c_str());
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+        }
+        ImGui::PopTextWrapPos();
+        ImGui::EndGroup();
+        if (dup) ui_tip("Everything in this package is also in the other one, with the same contents, so the game gets the same items "
+                        "twice (for example the same skin twice). Removing it removes only COGBox's unpacked copy - your package file "
+                        "is not touched.");
+        const ImVec2 t0 = ImGui::GetItemRectMin(), t1 = ImGui::GetItemRectMax();
+        const float by = std::max(p0.y, (t0.y + t1.y) * 0.5f - bh * 0.5f);
+        ImGui::SetCursorScreenPos(ImVec2(g_rowX1 - bw, by));
         const bool off = busy || running || dlc_dupes_running();   // r25: not while the duplicate check reads the files
         if (off) ImGui::BeginDisabled();
-        if (small_button("Remove")) dlc_remove_ask(a, g, dl[i]);
+        if (th_button(remove, ImVec2(bw, bh), true, F_BODY)) dlc_remove_ask(a, g, dl[i]);
         if (off) ImGui::EndDisabled();
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, std::max(t1.y, by + bh) + ImGui::GetStyle().ItemSpacing.y));
+        ImGui::Dummy(ImVec2(0, 0));
         ImGui::PopID();
     }
     if (dl.size() > 1 && dlc_dupes_checking(g)) lamp_line(0, "Checking for duplicates...");   // r22 R1: on a worker thread
@@ -1687,7 +1829,7 @@ static void about_tab(App &a, int g)
         if (s.empty()) set_message(a, std::string("No play of ") + d.name + " yet - play once, then make the report.", false);
         else if (!a.ini.geti("Notices", "ReportExperimentalNever", 0)) {   // Shagg 31 Oct: experimental settings off first
             ask(a, "reportexp", g, "Before you make the report",
-                "Experimental settings (FSR / DLSS / XeSS, XeGTAO, frame generation and others) are for "
+                "Experimental settings (FSR / DLSS, frame generation and others) are for "
                 "testing, not for regular play - for the smoothest play, use settings that aren't marked experimental.\n\n"
                 "Please turn every experimental setting off, play again and then make the report - unless the report is "
                 "about one of those settings. The report lists the experimental settings that were on.",
@@ -1737,6 +1879,8 @@ static void about_tab(App &a, int g)
     bool fs = a.fullscreen;   // job 523
     if (ImGui::Checkbox(tr("Fullscreen (F11, or LT + RT together)"), &fs)) set_fullscreen(a, fs);
     ImGui::SameLine(0, S(24));
+    wrap_if_no_room(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
+                    ImGui::CalcTextSize(tr("Borderless window (no title bar)")).x);   // 0.6.5: else on its own line
     bool bl = a.borderless;   // job 523
     if (ImGui::Checkbox(tr("Borderless window (no title bar)"), &bl)) set_borderless(a, bl);
     ui_tip(k_winTip);
@@ -1756,8 +1900,6 @@ static void about_tab(App &a, int g)
             "NVIDIA, GeForce RTX, DLSS and Reflex are trademarks of NVIDIA Corporation.");
     ui_note("AMD FidelityFX\u2122 Super Resolution (FSR) \u2014 Uses AMD FidelityFX FSR technology (AMD FidelityFX SDK). "
             "AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc.");
-    ui_note("Intel\u00AE XeSS \u2014 Uses Intel XeSS technology (XeSS Super Resolution, XeSS Frame Generation, XeLL). "
-            "Intel and XeSS are trademarks of Intel Corporation or its subsidiaries.");
     if (small_button("Licences folder")) {
         const std::string ld = join(exe_dir(), "licenses");
         if (dir_exists(ld)) open_folder(a, ld); else set_message(a, "The licenses folder is missing - unzip the release again.", true);
@@ -1774,27 +1916,33 @@ static const char *const k_dispPicture[] = { "HDR", "PaperWhite", "Peak", nullpt
 static const char *const k_gfxQuality[] = { "GraphicsCard", "Api", "WineApi", "Preset", "Resolution", "AAMode", "DlssModel", "Sharpen", "SceneMode", "FrameGen", nullptr };
 static const char *const k_gfxDetail[] = { "Aniso", "Trilinear", "MipFade", "Pool", "TexCache", "DrawDist", "ShadowDetail", "AO", nullptr };
 static const char *const k_gfxCamera[] = { "MotionBlur", "DoF", "DofScale", "Bloom", "FilmGrain", "Shake", "Fov", nullptr };
-static const char *const k_ctlPad[] = { "PadLayout", "Vibration", "AdaptiveTriggers", "TriggerRumble", "PadPrompts", "PromptStyle", "DeadZone", "RadialDZ", "LowLag", nullptr };
+static const char *const k_ctlPad[] = { "PadLayout", "Vibration", "AdaptiveTriggers", "TriggerRumble", "PadPrompts", "PromptStyle", "DeadZoneL", "DeadZoneR", "LowLag", nullptr };
 static const char *const k_ctlMouse[] = { "Mnk", "Sens", "AimTurn", "WalkMode", nullptr };
-static const char *const k_playGame[] = { "Version", "Lang", "VoiceLang", "SkipLogos", "Mute", nullptr };
+static const char *const k_playGame[] = { "Lang", "VoiceLang", "SkipLogos", nullptr };
 static const char *const k_playPlayers[] = { "Players", "SplitLayout", "SystemLink", "PeerIps", nullptr };
-static const char *const k_playExtras[] = { "OriginalUnlocks", "Cheats", "Mutators", nullptr };
+static const char *const k_playExtras[] = { "OriginalUnlocks", "Mutators", nullptr };
+static const char *const k_playCheats[] = { "CheatGod", "CheatWeapons", "CheatSpeed", "CheatHud", "Cheats", nullptr };   // GitHub #342
+static const char *const k_audOutput[] = { "AudioDevice", "AudioChannels", nullptr };   // GitHub #425
+static const char *const k_audVolume[] = { "NightMode", "Mute", nullptr };
 static const char *const k_achPopups[] = { "AchievementStyle", "AchievementColour", "AchievementPosition", "AchievementSound",
                                            "HideAchievementPopups", nullptr };   // PR #187
 static const char *const k_none[] = { nullptr };
-static const TabGroups k_groups[5] = {   // one per gs::Tab, in its order
+static const TabGroups k_groups[6] = {   // one per gs::Tab, in its order
     { { "SCREEN", "FRAME RATE", "PICTURE", nullptr }, { k_dispScreen, k_dispFrames, k_dispPicture, k_none }, { 0, 1, 1, 0 } },
     { { "QUALITY", "DETAIL", "CAMERA AND EFFECTS", nullptr }, { k_gfxQuality, k_gfxDetail, k_gfxCamera, k_none }, { 0, 1, 0, 0 } },
     { { "CONTROLLER", "KEYBOARD AND MOUSE", nullptr, nullptr }, { k_ctlPad, k_ctlMouse, k_none, k_none }, { 0, 0, 0, 0 } },
-    { { "GAME", "PLAYERS", "EXTRAS", nullptr }, { k_playGame, k_playPlayers, k_playExtras, k_none }, { 0, 0, 1, 0 } },
+    { { "GAME", "PLAYERS", "EXTRAS", "CHEATS" }, { k_playGame, k_playPlayers, k_playExtras, k_playCheats }, { 0, 0, 1, 1 } },
+    { { "OUTPUT", "VOLUME", nullptr, nullptr }, { k_audOutput, k_audVolume, k_none, k_none }, { 0, 0, 0, 0 } },
     { { "ACHIEVEMENT POPUPS", nullptr, nullptr, nullptr }, { k_achPopups, k_none, k_none, k_none }, { 0, 0, 0, 0 } },
 };
 
 // ---- the page --------------------------------------------------------------------------------------------------------
-static const char *k_tabs[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "GAMEPLAY", "ACHIEVEMENTS", "SOCIAL", "MODS", "ABOUT" };   // the one sound option is in Gameplay
-static const int k_tabCount = 8;
-static const int k_tabSocial = 5;   // social step 3; the tabs before it are gs::Tab's (ACHIEVEMENTS = gs::Tab::Achievements)
-static const int k_tabMods = 6;     // ABOUT is the last
+// the tabs before SOCIAL are gs::Tab's, in its order (GitHub #425: AUDIO); app.h names the ones after (kTabSocial ...)
+static const char *k_tabs[] = { "DISPLAY", "GRAPHICS", "CONTROLS", "GAMEPLAY", "AUDIO", "ACHIEVEMENTS", "SOCIAL", "MODS", "ABOUT" };
+static const int k_tabCount = kTabCount;
+static const int k_tabSocial = kTabSocial;   // social step 3
+static const int k_tabMods = kTabMods;       // ABOUT is the last
+static_assert(sizeof k_tabs / sizeof k_tabs[0] == kTabCount, "a tab name for each tab");
 
 static std::string summary(App &a, int g)
 {
@@ -1890,6 +2038,12 @@ void page_draw(App &a, ImVec2 size)
     // LB / RB switch tabs while the bar is not chosen
     if (a.barSel < 0 && !padCap && ImGui::IsKeyPressed(ImGuiKey_GamepadL1)) a.tab = (a.tab + k_tabCount - 1) % k_tabCount;
     if (a.barSel < 0 && !padCap && ImGui::IsKeyPressed(ImGuiKey_GamepadR1)) a.tab = (a.tab + 1) % k_tabCount;
+    {   // GitHub #425: the sound output devices are listed again whenever the AUDIO tab opens (a headset plugged in since)
+        static int lastTab = -1, lastFrame = -10;
+        if (ImGui::GetFrameCount() > lastFrame + 1) lastTab = -1;   // the page was closed in between
+        if (a.tab == (int)gs::Tab::Audio && lastTab != a.tab) audio_devices_refresh(a);
+        lastTab = a.tab; lastFrame = ImGui::GetFrameCount();
+    }
     dl->AddLine(ImVec2(p0.x + S(24), ty + tabH), ImVec2(p1.x - S(24), ty + tabH), U(col::redHi, 0.7f), S(2));
 
     // the rows
@@ -1898,7 +2052,7 @@ void page_draw(App &a, ImVec2 size)
     ImGui::SetCursorScreenPos(c0);
     ImGui::BeginChild("rows", ImVec2(c1.x - c0.x, c1.y - c0.y), ImGuiChildFlags_NavFlattened);
     ImGui::PushFont(F_BODY, FS(F_BODY) * k_rowText);
-    g_ctrlW = T(300);
+    g_ctrlW = T(270);   // 0.6.5 (Shagg): 10% narrower than the first two-column build
     g_labelW = std::min(S(500), (c1.x - c0.x) - g_ctrlW - S(40));
     g_rowX1 = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x - S(16);
     g_sections = 0;

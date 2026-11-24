@@ -139,6 +139,21 @@ order (the notes below say where a patch needs a different folder or `patch -p` 
   reported, and a flush callback. Apply the first in the SDK root (`git apply`), the second inside the submodule
   (`git -C thirdparty/FFmpeg apply`; that file is CRLF in the Windows checkout) - and again after every submodule or
   SDK update. Needs patch 80.
+- `sdk-patch117-audio-output-options.diff` (GitHub #425, the launcher's AUDIO tab; after 116; NOT BUILT into a release
+  yet - needs a runtime build): three switches in `src/audio/sdl/sdl_audio_driver.cpp`, their defaults the behaviour
+  before. `--audio_output_device=<name>`: the SDL playback device of that name (exact, else the first whose name
+  contains it, any case), as the launcher lists them; not found = the default device and one log line with the names
+  there are. A device chosen by name stays that device; patch 66's 5 s slot checks instead that it is still in SDL's
+  list, and when it was unplugged the output reopens on the default device for the rest of the run (patch 66's
+  following resumes; the silent sink if that fails). Empty = the default device, followed as before. `--audio_channels`: 0 automatic (5.1, stereo when the device has two channels or
+  fewer), 1 mono (the stereo fold with half of each side on both channels), 2 stereo (the fold, even on a surround
+  device), 6 5.1 and 8 7.1 whatever the device reports (SDL mixes down for fewer speakers); 7.1 gets the 5.1 front,
+  centre and LFE as they are and each surround channel on its back and side speaker at -3 dB. `--audio_night_mode`: a
+  compressor on the final mix in the SDL callback (one peak follower for all channels, 4:1 above -30 dBFS, 5 ms / 200 ms,
+  +9 dB makeup, a limiter at -1 dBFS); read on every callback, so the in-game menu switches it live; off = not called
+  (the output is unchanged). The mixes are in `include/rex/audio/output_mix.h`, tested in
+  `tests/unit/audio/output_mix_test.cpp` (7 cases, with the device-name match; run with a stand-in for Catch2's macros, as the SDK's test build is
+  off here). Apply it in the SDK root (`git apply`).
 - `sdk-patch59-sdl-pump-without-controllers.diff` (GitHub #108, Steam Deck; after 58, NOT BUILT yet - needs a runtime build): the SDL driver pumped SDL events only from calls on a controller it already knew, so with none known it never pumped, and under Wine / Proton SDL finds pads (XInput / DirectInput) only while pumping - the 0.3.5 Deck logs show `SDL input driver initialized` and never `SDL JoystickAdded`. `EnumerateDevices` now queues a pump at most every 0.5 s while no controller is known. Apply it in the SDK root (`git apply`).
 - `sdk-patch58-g3-online-xuid-save-convert.diff` (GitHub #68, jobs 1066 / 1067; COGBox 0.4.0's runtime, after 57): the
   Gears 3 friendly-fire / "killed out of nowhere" fix, ported from Xenia Canary. `NetDll_XNetRandom` fills the buffer
@@ -163,7 +178,7 @@ order (the notes below say where a patch needs a different folder or `patch -p` 
 
 Gears 3 and Judgment use the same runtime.
 - `sdk-patch85-hdr-overlays.diff` (native HDR, legoliamneeson, PR #267; after 83 - first numbered 80, which the upstream-fixes patch already had, then 83, which PR #272's net-rate trace took; 84 is reserved for PR #274's open matches; NOT BUILT into a release yet - needs a runtime build): D3D12 host UI uses a separate PQ/BT.2020 pixel shader with SDR input bounds and a fixed 203-nit white. Covers FPS text, shader notes, menus and achievements, so SDR white is never written as 10,000-nit PQ white. Includes readable HLSL and an FXC SM5.1 header. Apply in the SDK root and rebuild/install the runtime; copy the new `rexruntime.dll` beside the game after closing it. SDR keeps its original shader.
-- `sdk-patch86-vulkan-hdr.diff` (legoliamneeson, PR #267; after 85 - renumbered from 81; NOT BUILT into a release yet): request Vulkan swapchain colour-space support, select an advertised 10-bit ST.2084 HDR10 format, and encode host overlays to bounded PQ/BT.2020 with the matching SPIR-V shader. Reports a missing HDR10 surface instead of sending PQ to SDR. Rebuild/install the SDK runtime. Vulkan FSR also needs FSR SDK 2.4 headers and matching signed DLLs selected by the game's `GN_FFX_DIR`; this patch does not add Vulkan DLSS or XeSS.
+- `sdk-patch86-vulkan-hdr.diff` (legoliamneeson, PR #267; after 85 - renumbered from 81; NOT BUILT into a release yet): request Vulkan swapchain colour-space support, select an advertised 10-bit ST.2084 HDR10 format, and encode host overlays to bounded PQ/BT.2020 with the matching SPIR-V shader. Reports a missing HDR10 surface instead of sending PQ to SDR. Rebuild/install the SDK runtime. Vulkan FSR also needs FSR SDK 2.4 headers and matching signed DLLs selected by the game's `GN_FFX_DIR`; this patch does not add Vulkan DLSS.
 - `sdk-patch66-audio-session-volume.diff` (GitHub #203: sound on one output device, silence on another, while the log
   shows the silent device opened normally). Windows keeps a volume-mixer slider and mute for each program on each output
   device, by the exe's path, across reboots and reinstalls to the same folder. At start, and when the Windows default

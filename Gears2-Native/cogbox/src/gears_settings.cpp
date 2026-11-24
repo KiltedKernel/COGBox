@@ -88,7 +88,7 @@ std::vector<std::string> start_names(Game g) {
     }
     return v;
 }
-const char* const k_aaNames[6] = { "Off", "SMAA", "FSR", "DLSS (NVIDIA RTX)", "XeSS", "SMAA T2x" };   // PS1 150; 5: notes/80 s.7
+const char* const k_aaNames[6] = { "Off", "SMAA", "FSR", "DLSS (NVIDIA RTX)", "", "SMAA T2x" };   // 4: a dropped upscaler (never chosen: Store::view)   // PS1 150; 5: notes/80 s.7
 // Job 638: saved as "FrameCap", in order; the old "Fps" (30 / 60 / 120 / Unlimited) is read once and moved over
 // (Store::load_ini). Shagg: 30, 40, 45, 60, 90, 120, 144, 165, 180, Unlimited (list 2; 40 / 45 for the Steam Deck; list 1 had no 40 / 180 -
 // files without "FrameCapList=2" are moved over once in Store::load_ini).
@@ -99,7 +99,7 @@ const int k_bodyCap[3] = { 0, 16, 32 }, k_bodyCapG2[3] = { 0, 12, 20 };   // Git
 const int k_bodyLife[3] = { 0, 60, 300 }, k_bodyUnseen[3] = { 0, 20, 60 };  // #306, seconds (game: 20 / 8; Gears 1 5)
 const char* const k_shakeValue[3] = { "", "*=0.5", "=0" };   // 0.2.0 (#12): the factor scales the shake - Less halves the game's own, Off is 0                                    // PS1 167
 const int k_poolMb[4] = { 0, -1, 256, 320 };                                                 // PS1 171
-const int k_winSizes[6][2] = { { 0, 0 }, { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } };   // PS1 174
+const int k_winSizes[7][2] = { { 0, 0 }, { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 }, { 1366, 768 } };   // PS1 174
 const double k_deadValue[6] = { 0, 0.05, 0.10, 0.15, 0.20, 0.25 };                          // PS1 177
 
 std::string not_yet(int g, const std::string& what = "") {   // PS1 262
@@ -165,7 +165,7 @@ std::vector<Option> make_options(Game g) {
                "the whole screen (quick alt-tab). Exclusive fullscreen: real fullscreen mode (lower latency on some PCs; "
                "alt-tab is slower; on Steam Deck / Linux this is borderless).", 330));
     add(choice("WindowSize", "Window size", Tab::Display, PG,
-               { "Default", "1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440", "3840 x 2160" }, 0,
+               { "Default", "1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440", "3840 x 2160", "1366 x 768" }, 0,   /* GitHub #436: 1366 x 768 last (saved numbers keep their meaning) */
                "The window's size when not fullscreen. Default = the game's own.", 332), "", "!Fullscreen");
     // Monitor: no PS1 tooltip (59-how-to-play: "Which monitor fullscreen uses"). Entries 1..N: monitor_label().
     add(choice("Monitor", "Monitor", Tab::Display, SH, { "Default (main screen)" }, 0,
@@ -240,9 +240,13 @@ std::vector<Option> make_options(Game g) {
              "A wider view that matches an ultrawide monitor (21:9 or 32:9); black bars on other shapes.", 362), "ultrawide");
     // 0.4.9: 4:3 screens (SDK patch 70 --video_mode_widescreen=false): the game is told it is on a 4:3 TV and lays
     // itself out for 4:3 (a 960x720 picture, x the resolution scale), as on the console. Not with Ultrawide.
-    add(choice("AspectRatio", "Aspect ratio", Tab::Display, PG, { "Auto", "16:9", "4:3" }, 0,
-               "4:3 tells the game it is on an old 4:3 TV, so it makes a 4:3 picture and HUD itself, as on the console. "
-               "Auto = 16:9 for now (4:3 is untested: choose it yourself). Not with Ultrawide.", 0), "aspect43", "!Ultrawide");
+    // 0.6.5 (Shagg 16 Nov: 16:10 for the Steam Deck / 16:10 laptops): the same path with a 1152x720 mode - the games
+    // size their picture from a non-widescreen mode (720 x w / h, jobs 1965 / 1966: Gears 2 / 3 / Judgment draw a full
+    // 1152x720 picture, HUD laid out by the game). Added LAST so a saved index keeps its meaning.
+    add(choice("AspectRatio", "Aspect ratio", Tab::Display, PG, { "Auto", "16:9", "4:3", "16:10" }, 0,
+               "16:10 and 4:3 tell the game the screen's shape, so it makes a picture of that shape and lays out its HUD "
+               "itself (16:10: a taller view, for a Steam Deck or a 16:10 laptop). Auto = 16:10 on a 16:10 screen, else "
+               "16:9 (4:3 is untested: choose it yourself). Not with Ultrawide.", 0), "aspect43", "!Ultrawide");
 
     // ---- Graphics ------------------------------------------------------------------------------------------------
     add(choice("Preset", "Quality preset", Tab::Graphics, PG, { "Original (as on the console)", "High", "Ultra", "Custom" }, 3,
@@ -255,13 +259,13 @@ std::vector<Option> make_options(Game g) {
     static const char* const kVkTip =
                "Vulkan is a full alternative to DirectX 12, and the usual choice on Steam Deck / Linux. "
                "\n"
-               "On Vulkan, DLSS / XeSS are not available and FSR is experimental (\"FSR on Vulkan (experimental)\"); otherwise SMAA is used, "
+               "On Vulkan, DLSS is not available and FSR is experimental (\"FSR on Vulkan (experimental)\"); otherwise SMAA is used, "
                "frame generation is AMD FSR only (experimental), "
                "and Reflex / Anti-Lag are off. If something looks wrong, make a problem report and send it to us.";
     static const char* const kVkTipExp =
                "Experimental in this game - some things still look wrong on Vulkan (in Gears 3, black eyes); DirectX 12 is "
                "the tested renderer.\n"
-               "On Vulkan, DLSS / XeSS are not available and FSR is experimental (\"FSR on Vulkan (experimental)\"); otherwise SMAA is used, "
+               "On Vulkan, DLSS is not available and FSR is experimental (\"FSR on Vulkan (experimental)\"); otherwise SMAA is used, "
                "frame generation is AMD FSR only (experimental), "
                "and Reflex / Anti-Lag are off. If something looks wrong, make a problem report and send it to us.";
     add(choice("Api", "Graphics API", Tab::Graphics, PG, { "DirectX 12 (recommended)", vkExp ? "Vulkan (experimental)" : "Vulkan" }, 0,
@@ -289,22 +293,26 @@ std::vector<Option> make_options(Game g) {
         add(std::move(o), "gpucard");
     }
     // Render resolution: no PS1 tooltip; text from 59-how-to-play's Picture table.
+    // 0.6.6 (Shagg 20 Nov: "we need to get rid of the match my monitor option. It causes too many problems. People can
+    // select their own resolution"): choice 4 stays in the list so saved numbers keep their meaning (5 = 1080p), but it
+    // is no longer offered (page.cpp) and a saved 4 becomes the scale it used to pick (Store::view).
     add(choice("Resolution", "Render resolution", Tab::Graphics, PG,
-               { "1x - 720p (original)", "2x - 1440p", "3x - 4K", "4x - 5K (supersampling, heavy)", "Match my monitor (native)", "1080p" }, 0,
+               { "1x - 720p (original)", "2x - 1440p", "3x - 4K", "4x - 5K (supersampling, heavy)", "Match my monitor (native)", "1080p",
+                 "768p", "900p" }, 0,   /* GitHub #436: 768p / 900p (1366x768, 1600x900 screens) after the old choices */
                "How much detail the game draws: 1x: 1280x720 as on the console, 2x: 2560x1440, 3x: 3840x2160 (4K), "
-               "4x: 5120x2880. Real detail, not an upscale. Match my monitor: the smallest scale that covers the screen, "
-               "resampled to its exact size. 1080p: drawn at 720p and upscaled to the screen with sharpening - fast, for "
-               "weaker graphics cards; softer than real detail.", 340), "", "", true);
+               "4x: 5120x2880. Real detail, not an upscale. A resolution above your screen's is shrunk to fit it "
+               "(supersampling): on a 1080p screen 2x draws four times the pixels of 720p (GitHub #388). 1080p: the game itself draws 1920x1080 - real detail, between 1x and 2x in cost. 768p / 900p: the same for 1366x768 and 1600x900 screens. (In Judgment and Gears of War "
+               "with Ultrawide on, 1080p is still 720p upscaled with sharpening.)", 340), "", "", true);
     // GitHub #59: the 1080p mode's RCAS sharpen made text and some textures look wrong under Wine / Proton (Linux,
     // NVIDIA). Automatic = on in Windows, off under Wine; On / Off override it everywhere.
     add(choice("Sharpen", "Upscale sharpening (1080p)", Tab::Graphics, PG, { "Automatic", "On", "Off" }, 0,
                "With the 1080p render resolution: sharpen the upscaled picture. Automatic = on, except on Steam Deck / "
                "Linux (Wine / Proton), where it can make text and some textures look wrong.", 0));
-    add(choice("AAMode", "Anti-aliasing", Tab::Graphics, PG, { "Off", "SMAA (recommended)", "FSR (FSR 4 on RX 6000 or newer, FSR 3.1 otherwise)", "DLSS (NVIDIA RTX, experimental)", "XeSS (highly experimental)",   /* fsr049 */   /* 0.4.7: DLSS tested clean in G2/G3/GJ; 0.6.4 (Shagg 16 Nov, GitHub #345): experimental again - scene scaling in Gears 3 / Judgment */
+    add(choice("AAMode", "Anti-aliasing", Tab::Graphics, PG, { "Off", "SMAA (recommended)", "FSR (FSR 4 on RX 6000 or newer, FSR 3.1 otherwise)", "DLSS (NVIDIA RTX, experimental)", "(no longer offered)",   /* fsr049 */   /* 0.4.7: DLSS tested clean in G2/G3/GJ; 0.6.4 (Shagg 16 Nov, GitHub #345): experimental again - scene scaling in Gears 3 / Judgment */
                  "SMAA T2x (temporal)" }, 1,   /* Shagg 11-06: SMAA by default */
                "SMAA: light, sharp, any GPU. FSR: AMD's temporal anti-aliasing / upscaler for the 3D scene - FSR 4 on RX 6000 or "
                "newer, FSR 3.1 otherwise (any graphics card), DirectX 12 or Vulkan. DLSS: the same on "
-               "NVIDIA RTX cards. XeSS: the same, best on Intel Arc cards.\nSMAA T2x: SMAA plus a temporal pass - smoother edges and much less shimmer, at little cost, any graphics card, DirectX 12 or Vulkan. Gears 2 and Gears 3 for now.", 346), "", "", true);
+               "NVIDIA RTX cards.\nSMAA T2x: SMAA plus a temporal pass - smoother edges and much less shimmer, at little cost, any graphics card, DirectX 12 or Vulkan. Gears 2 and Gears 3 for now.", 346), "", "", true);
     // Review (fsr049): FSR on Vulkan is opt-in while it is new - without this box, FSR on Vulkan becomes SMAA as before.
     add(make("FsrVulkan", "FSR on Vulkan (experimental)", Tab::Graphics, Kind::Bool, PG, 0,
              "With Vulkan as the Graphics API: use AMD FSR (AMD FSR SDK 2.4 Vulkan upscaler) instead of SMAA when "
@@ -312,7 +320,7 @@ std::vector<Option> make_options(Game g) {
     add(choice("SceneMode", "Scene resolution", Tab::Graphics, SH,
                { "Native (same as render resolution)", "Quality (scene at 2/3)", "Performance (scene at 1/2)",
                  "Ultra performance (scene at 1/3)" }, 0,
-               "With FSR, DLSS or XeSS: draw the 3D scene at a lower resolution and let the upscaler fill in the detail - more "
+               "With FSR or DLSS: draw the 3D scene at a lower resolution and let the upscaler fill in the detail - more "
                "frames per second, a little softer. HUD and menus stay at the full resolution.\nPerformance needs render "
                "resolution 2x (1440p) or 4x; Quality and Ultra performance need 3x (4K).", 351), "scenescale", "AAMode>=2");
     // 0.4.9: the DLSS Super Resolution model (renderer/dlss_upscaler.cpp --gow2_dlss_preset; NGX render-preset hints,
@@ -322,7 +330,8 @@ std::vector<Option> make_options(Game g) {
                  "K - transformer (best all-round quality)", "L - newest transformer (sharpest, heaviest)",
                  "M - newest transformer (sharp, lighter than L)" }, 0,
                "Which NVIDIA DLSS model draws the picture when Anti-aliasing is DLSS. Automatic: NVIDIA's own choice for "
-               "each mode - K for DLAA, Quality and Balanced, M for Performance, L for Ultra performance.\n"
+               "each mode - K for DLAA, Quality and Balanced, M for Performance, L for Ultra performance. On RTX 20 and 30 cards "
+               "Automatic uses K for every mode: M and L are slow there (0.6.6).\n"
                "J and K: the first transformer models - every RTX card (20, 30, 40 and 50 series).\n"
                "L and M: the newest models (DLSS 4.5). They also run on every RTX card, but are made for RTX 40 / 50: on "
                "RTX 20 / 30 they cost clearly more frames per second - try K there if the game gets slower.", 352), "dlssmodel");
@@ -333,16 +342,13 @@ std::vector<Option> make_options(Game g) {
                  "NVIDIA DLSS frame generation 3x (RTX 50, experimental)", "NVIDIA DLSS frame generation 4x (RTX 50, experimental)",
                  "NVIDIA DLSS frame generation dynamic (RTX 50, experimental)",
                  "NVIDIA DLSS frame generation 6x (RTX 50, experimental)",   /* 0.4.9: DLSS 4.5's 6x, after the others so saved choices keep their meaning */
-                 "Intel XeSS frame generation (experimental)" }, 0,   /* 0.4.9 (xefg049): 7, Intel XeSS-FG 2x + XeLL */
+                 "(no longer offered)" }, 0,   /* 7: a dropped choice, kept so the others keep their numbers */
                "Shows a generated frame between each two the game draws: smoother motion on a fast monitor, about one frame more "
                "input lag. Works best when the game already runs at 60 fps or more. Any DirectX 12 graphics card. In Gears 1 "
                "(experimental) characters can ghost slightly in dark areas.\nNVIDIA DLSS frame generation "
                "(RTX 40/50 only, experimental): 2x, 3x, 4x or 6x the frames the game draws (3x / 4x / 6x / dynamic: RTX 50; "
                "dynamic picks the multiplier to match your monitor); needs NVIDIA's "
-               "Streamline files next to the game. If it can't run, the game uses AMD's instead (or none).\nIntel XeSS frame "
-               "generation (experimental, untested): 2x, with Intel's Xe Low Latency. Made for Intel Arc graphics cards; Intel "
-               "also allows it on other DirectX 12 cards (NVIDIA RTX 30 / Radeon RX 6000 or newer recommended). If it can't "
-               "run, the game uses AMD's instead (or none).", 356), "framegen");
+               "Streamline files next to the game. If it can't run, the game uses AMD's instead (or none).", 356), "framegen");
     // Aniso: no PS1 tooltip; text from 59-how-to-play ("16x anisotropic filtering").
     add(make("Aniso", "Sharper textures (16x anisotropic)", Tab::Graphics, Kind::Bool, OWN, g == Game::Gears2 ? 1 : 0,
              "16x anisotropic filtering: textures seen at an angle (floors, walls) stay sharp.", 357), "aniso", "", true);
@@ -405,19 +411,22 @@ std::vector<Option> make_options(Game g) {
     // be, since every flare would show through the scenery there.
     // Notes/80 (Gears2-Native): XeGTAO screen-space ambient occlusion in place of the game's own (Gears 2), or added
     // where a level has none (Gears 3 s.9: opt-in there, default "Game's own").
-    add(choice("AO", "Ambient occlusion", Tab::Graphics, PG, { "Off", "Game's own", "XeGTAO (high, highly experimental)", "XeGTAO (ultra, highly experimental)", "CACAO (experimental)" },
-                        1,   // Game's own: XeGTAO is opt-in in every game
-               "The soft shadowing in corners, creases and where things touch. XeGTAO: a modern full-resolution version "
-               "(Intel's XeGTAO) in place of the game's own low-resolution one - exact contact shadows instead of blobs, "
-               "characters included. Highly experimental (Shagg 3 Nov): in our tests it cost about 5 ms a frame, roughly halving a "
-               "high frame rate - being worked on. Ultra looks in more directions and catches more small details, for a "
-               "little more. Game's own: the original. Off: none.", 0), "ao");
+    // 0.6.6 (Shagg 20 Nov: "Off should be = Default and On should be = whatever looks the best but costs the least"):
+    // two choices are offered, Default (1) and On (2). The five keep their numbers so saved settings keep their meaning;
+    // Store::view turns a saved Off into Default and a saved Ultra / CACAO into On. Job 2169 (Gears 2, RTX 3080 Ti,
+    // 1440p): no AO 4.86 ms a frame, high 5.36-5.46, high at half resolution 5.11, ultra 5.90, CACAO high 6.08.
+    add(choice("AO", "Ambient occlusion", Tab::Graphics, PG, { "Off", "Default", "On", "XeGTAO (ultra)", "CACAO" },
+                        1,   // Default: the game as it shipped
+               "The soft shadowing in corners, creases and where things touch. Default: the game as it shipped. On: a "
+               "modern version (Intel's XeGTAO) in place of the game's own low-resolution one - exact contact shadows "
+               "instead of blobs, characters included. It costs little: about a quarter to half a millisecond a frame "
+               "at 1440p on an RTX 3080 Ti in our tests.", 0), "ao");
     // Screen-space indirect lighting (--gow2_ssil, ssil_shaders.h): one bounce of light from nearby lit surfaces, opt-in;
     // it works on XeGTAO's depth pyramid, so it needs Ambient occlusion: XeGTAO.
     add(choice("Ssil", "Indirect lighting", Tab::Graphics, PG, { "Game's own", "SSIL (experimental)" }, 0,
                "Light bounced from nearby lit surfaces: walls, floors and lamps brighten what is next to them, with some "
                "colour bleeding. Most visible in lit interiors and city streets, subtle in open or dark areas. Needs Ambient "
-               "occlusion: XeGTAO. Experimental: about 1 ms a frame at 4K on an RTX 5090 in our tests, more on slower cards. "
+               "occlusion: On. Experimental: about 1 ms a frame at 4K on an RTX 5090 in our tests, more on slower cards. "
                "Game's own: the original.", 0), "ssil");
     // Notes/80 s.16 (Gears2-Native): PCSS for Gears 3's dynamic shadows (--gow2_pcss), Gears 3 only, opt-in.
     add(choice("SoftShadows", "Soft shadows", Tab::Graphics, PG, { "Game's own", "PCSS High (experimental)", "PCSS Ultra (experimental)" }, 0,
@@ -464,15 +473,21 @@ std::vector<Option> make_options(Game g) {
     add(number("Sens", "Mouse sensitivity", Tab::Controls, Kind::Float, SH, 0.01, 2, 0.01, 0.5,
                "How fast the mouse turns the camera. 0.5 is a good start; lower it for a high-DPI mouse, raise it for a "
                "low-DPI one.", 381, 2));
-    add(choice("DeadZone", "Extra stick dead zone", Tab::Controls, SH, { "Game's own", "5%", "10%", "15%", "20%", "25%" }, 0,
-               "Added on top of the game's own dead zone, for worn sticks that drift. Game's own = nothing added.", 382));
-    // GitHub #95: a round (radial) dead zone on both sticks, rescaled from its edge - Gears 3's feel for Gears 1 and 2.
-    // SDK patch 55 (pad_radial_deadzone). In Gears 1 and 2 the game's own per-axis dead zone on the look binding is
-    // taken off at the same time (below), so the round one is the one you feel.
-    add(choice("RadialDZ", "Radial stick dead zone", Tab::Controls, SH, { "Game's own", "8%", "12%", "16%", "20%", "25%" }, 0,
-               "A round dead zone on both sticks (measured from the centre, not per axis), so small diagonal aim moves "
-               "are not swallowed. Gears 1 and 2's own square dead zone on the camera is removed with it. Game's own = "
-               "unchanged.", 0), "padlayout");
+    // 0.6.5 (Shagg 16 Nov 22:22: "simple thumbstick deadzones like those found in popular emulators"): one slider per
+    // stick, 0-50 % in 1 % steps (was one 6-step choice for both). The old saved "DeadZone" choice is read into both
+    // (Store::load). Same runtime switches as before (left_ / right_stick_deadzone_percentage, a fraction), read per poll.
+    // GitHub #377 (Shagg 19 Nov: "Joystick deadzone settings are a staple ... One slider for each stick"): from 1 up the
+    // slider is the stick's WHOLE dead zone - round, rescaled from its edge - and the game's own (30 % on movement in
+    // every game; on the camera 20-30 % in Gears 1, 30 % in Gears 2, 20 % in Judgment, none in Gears 3's binding) is
+    // taken out of its bindings (build_args), so 5 means 5 %. 0 = the game's own, unchanged. Replaces the anti-dead
+    // zone sliders of c0db23a and the "Radial stick dead zone" choice (GitHub #95; a saved one moves to the right slider).
+    add(number("DeadZoneL", "Left stick dead zone (%)", Tab::Controls, Kind::Int, SH, 0, 50, 1, 0,
+               "How far the left stick moves before you start walking. 0 = the game's own (about 30). From 1 up it "
+               "replaces the game's own: lower for quicker response, higher if the stick drifts. With keyboard and "
+               "mouse on, it is added to the game's own instead.", 382));
+    add(number("DeadZoneR", "Right stick dead zone (%)", Tab::Controls, Kind::Int, SH, 0, 50, 1, 0,
+               "How far the right stick moves before the camera turns. 0 = the game's own (20 to 30; Gears 3 has its "
+               "own). From 1 up it replaces the game's own: lower for finer aiming, higher if the camera drifts.", 0));
     // GitHub #97: controller layouts (SDK patch 55, pad_remap). Custom = CogBox.ini [Pad] Remap=, e.g. "a=b,b=a" - 0.6.3:
     // edited on the Controls tab (page.cpp pad_layout_section, PadMap in the header).
     add(choice("PadLayout", "Controller layout", Tab::Controls, SH,
@@ -511,7 +526,7 @@ std::vector<Option> make_options(Game g) {
     // 0.3.0 (Shagg 13:43): no "Start at" chapter option in any game - a level opened by its URL skips the game's own
     // chapter start (checkpoint, scripting), so a chapter could look broken that plays fine from the game's Chapter
     // Select. A player's older saved "Start" value is ignored (below).
-    add(choice("Version", "Game version", Tab::Gameplay, OWN, { "Title Update (latest)", "Disc (original release)" },
+    add(choice("Version", "Game version", Tab::Gameplay, OWN, { "Title Update (latest)", "(no longer offered)" },   // 0.6.6: one version; the option is not shown
                0,   // COGBox (Shagg 19:46): the PGO build is the default - Gears 2's and Gears 3's title-update builds
                     // (the PS1 has G3Version = 1, the disc; Gears 3's chat built both its exes with PGO, job 143)
                "Title updates are now required: every game runs with its last patch from Epic (Gears 2 and 3: TU6, Judgment: "
@@ -528,10 +543,10 @@ std::vector<Option> make_options(Game g) {
                "the game's own split. Gears 2: side by side from the start.", 325), "splitlayout");
     // 0.3.5 (GitHub #72, SDK patch 49b): System Link over a LAN or a LAN VPN (Radmin VPN, ZeroTier, Hamachi). Off = the
     // runtime behaves exactly as before ("No Network Connection").
-    add(make("SystemLink", "System Link - LAN play (experimental)", Tab::Gameplay, Kind::Bool, PG, 0,
-             "Experimental - lets the game's System Link find and join games on other PCs on your network (or on a LAN VPN "
-             "such as Radmin VPN, ZeroTier or Hamachi; not internet VPNs like NordVPN). Title Update versions only. Gears of War "
-             "and Gears 2 co-op worked in testing; other modes and the other games are less tested. Voice chat is not supported yet. Windows may ask about the firewall: "
+    add(make("SystemLink", "System Link - LAN play", Tab::Gameplay, Kind::Bool, PG, 0,
+             "Lets the game's System Link find and join games on other PCs on your network (or on a LAN VPN "
+             "such as Radmin VPN, ZeroTier or Hamachi; not internet VPNs like NordVPN). Title Update versions only. "
+             "Voice chat is not supported yet. Windows may ask about the firewall: "
              "allow Private networks.", 325), "syslink");
     // 0.4.8 (GitHub #229, clovis-junior): the other players' addresses, as the reporter's extra-args.txt line
     // --net_peer_ip=... did (SDK patch 49b / 50) - typed here instead. IPv4 only (Radmin VPN 26.x, ZeroTier, Hamachi).
@@ -549,6 +564,13 @@ std::vector<Option> make_options(Game g) {
     add(choice("DeadBodies", "Dead bodies", Tab::Gameplay, PG, { "Game's own", "More", "Many" }, 0,
                "How many fallen enemies stay on the ground, and for how long. More and Many keep more bodies for longer; "
                "this costs some performance and memory. Bodies are still cleared at cutscenes.", 0), "iniedit");
+    // In-match chat (PR #421): Y / U, the keys in KEYBOARD KEYS
+    add(make("MatchChat", "In-match chat", Tab::Gameplay, Kind::Bool, SH, 1,
+             "In a match, Y opens chat to everyone and U chat to your team; messages show on the left of the screen. "
+             "Off: the keys do nothing and no messages are shown.", 0));
+    add(choice("MatchChatBackground", "Chat background", Tab::Gameplay, SH, { "Dark see-through", "None" }, 0,
+               "Dark see-through: the messages sit on a dark panel with a red edge. None: just the text, outlined so it "
+               "stays readable, so less of the game is covered.", 0));
     add(make("SkipLogos", "Skip the intro logos", Tab::Gameplay, Kind::Bool, PG, 0,
              "Starts at the title screen without the publisher / studio logo films. The loading film and cutscenes still play.", 326),
         "skiplogos");
@@ -565,13 +587,28 @@ std::vector<Option> make_options(Game g) {
              "(they respawn every wave). It does nothing in Versus, in the lobbies or in someone else's game. For bots in Versus "
              "use the lobby's own bot setting.", 0),
         "hordebots");
-    add(make("Cheats", "Cheats (hotkeys F5-F11)", Tab::Gameplay, Kind::Bool, SH, 0,
-             "The developers' cheat keys, F5-F11 in game (god mode, slow motion, free camera - in Gears 1 fly through walls - "
-             "hide the HUD, all weapons). "
-             "Gears 2: in games on this PC only - never in System Link or online games. Gears 3 and Judgment: also in a "
-             "System Link or online game you host, where slow motion and the rest affect every player - please keep them "
-             "to your own games. Gears 1: not checked in System Link games yet. Achievements and saves are your own business."
-             " They do not work in Versus matches - only in the campaign and the wave modes (Horde, Beast, Survival).", 327), "cheats");
+    // GitHub #342 (Shagg 16 Nov: "the F keys are stupid"): the cheats you pick are simply on - no keys. The game applies
+    // them whenever you have a body, again after every level start, checkpoint and respawn (ue3/auto_cheats.h), never in
+    // Versus. The text shared by the four options' tips:
+#define CHEAT_RULES " Campaign and the wave modes (Horde, Beast, Survival) only - never in Versus. Gears 1 and 2: games on " \
+                    "this PC only. Gears 3 and Judgment: also a System Link or online game you host - please keep it to " \
+                    "your own games. Achievements and saves are your own business."
+    add(make("CheatGod", "God mode", Tab::Gameplay, Kind::Bool, SH, 0,
+             "Cheat: you take no damage." CHEAT_RULES, 0), "cheatauto");
+    add(make("CheatWeapons", "All weapons and ammo", Tab::Gameplay, Kind::Bool, SH, 0,
+             "Cheat: every weapon and full ammo, given again at every level start, checkpoint and respawn." CHEAT_RULES, 0),
+        "cheatweapons");
+    add(choice("CheatSpeed", "Game speed", Tab::Gameplay, SH, { "Normal", "Slow motion (3/4)", "Slow motion (1/2)",
+               "Slow motion (1/4)" }, 0,
+               "Cheat: the whole game runs slower (in a game you host, for every player). The game's own slow-motion "
+               "moments still play as made." CHEAT_RULES, 0), "cheatauto");
+    add(make("CheatHud", "Hide the HUD", Tab::Gameplay, Kind::Bool, SH, 0,
+             "No HUD while you play - for screenshots and videos. With Cheat keys on, F11 shows it again." CHEAT_RULES, 0),
+        "cheatauto");
+    add(make("Cheats", "Cheat keys (F9-F11)", Tab::Gameplay, Kind::Bool, SH, 0,
+             "The developers' keys in game: F9 free camera (Gears 1: fly through walls), F10 freeze the world, F11 hide / "
+             "show the HUD." CHEAT_RULES, 327), "cheats");
+#undef CHEAT_RULES
     add(make("Mutators", "Unlock all mutators", Tab::Gameplay, Kind::Bool, SH, 0,
              "Every mutator (gameplay modifier) available from the start. Writes nothing to your profile.", 328), "mutators");
     // First-person camera (Gears 3, Gears 2, Judgment; layer3 first_person.cpp): the game's own camera moved to the
@@ -598,9 +635,31 @@ std::vector<Option> make_options(Game g) {
                "The language of the spoken dialogue, separately from the menus and text (Game language). Needs that "
                "language's voice files on your copy (European copies have English, French, German, Italian, Spanish). "
                "Subtitles stored with the voices may follow them.", 0), "voicelang");
-    add(make("Mute", "Mute when the game is not the active window", Tab::Gameplay, Kind::Bool, SH, 0,
+    // ---- Audio (GitHub #425) -------------------------------------------------------------------------------------
+    // The runtime's sound output (SDK patch 117): every game's, so one value for all four. The id "Mute" is kept from
+    // when it was the only sound option (on Gameplay), so saved settings keep it.
+    {
+        Option o = make("AudioDevice", "Output device", Tab::Audio, Kind::Text, SH, 0,
+                        "Which speakers or headphones the game plays its sound on. System default follows the device "
+                        "Windows uses for sound, also when you change it while playing. Choose a device to always use "
+                        "that one. If the device you chose is not plugged in, the system default is used.", 0);
+        o.max_len = 160;
+        add(std::move(o), "audiodevice");
+    }
+    add(choice("AudioChannels", "Speaker setup", Tab::Audio, SH,
+               { "Automatic", "Mono", "Stereo", "5.1 surround", "7.1 surround" }, 0,
+               "How the game's 5.1 sound is laid out for your speakers. Automatic plays 5.1 on a surround device and "
+               "folds it to stereo otherwise. Stereo also suits headphones. Mono puts everything on both sides, for one "
+               "speaker or one ear. 7.1 surround is for 7.1 speakers: the surround channels play on both the side and "
+               "back speakers.", 0),
+        "audiochannels");
+    add(make("NightMode", "Night mode", Tab::Audio, Kind::Bool, SH, 0,
+             "Evens out the volume: quiet dialogue comes up and explosions and gunfire are softer, so you can play at a "
+             "low volume without missing speech or waking anyone.", 0),
+        "nightmode");
+    add(make("Mute", "Mute when the game is not the active window", Tab::Audio, Kind::Bool, SH, 0,
              "Silences the game while another window is in front; the sound comes back when you click back into the game.", 386),
-        "mute");   // the only sound option, so it lives here (no Audio tab)
+        "mute");
     (void)gi;
     return v;
 }
@@ -633,6 +692,14 @@ bool cap_exe(const Environment& e, const std::string& n) {
     // Discord 16 Nov (Horde bots greyed in Gears 2 on 0.6.3): 0.6.3's gow2.exe has no "gow2_horde_bots" text either - the
     // start of its description is searched (the 0.6.3 exe has it)
     if (n == "gow2_horde_bots" && e.cap.exe_has && e.cap.exe_has("GitHub #237 (francoissubke-blip's tip")) return true;
+    // review 20 Nov: "gow2_ao_half" is as short as those - the start of its description is searched as well
+    if (n == "gow2_ao_half" && e.cap.exe_has && e.cap.exe_has("XeGTAO at half resolution (test, Shagg 20 Nov)")) return true;
+    // review 20 Nov: the native HDR switches of Judgment and Gears 1 are 15-letter names too
+    if (n == "gowj_hdr_native" && e.cap.exe_has && e.cap.exe_has("Opt in to experimental native HDR grading and post-scene FXAA")) return true;
+    if (n == "gow1_hdr_native" && e.cap.exe_has && e.cap.exe_has("Opt in to experimental native HDR grading and motion blur")) return true;
+    // 0.6.6: --gowN_native_lines (true 1080p) by the start of its description, the same in all four games
+    if (n.size() > 13 && n.compare(n.size() - 13, 13, "_native_lines") == 0 && e.cap.exe_has &&
+        e.cap.exe_has("Experiment (true 1080p): the game's own screen height in lines")) return true;
     return e.cap.exe_has && e.cap.exe_has(n);
 }
 bool cap_rt(const Environment& e, const std::string& n) { return e.cap.runtime_has && e.cap.runtime_has(n); }
@@ -657,6 +724,17 @@ int expected_render_scale(Game g, const Settings& s, const Environment& e) {
     const bool wide = uw && s.b("Ultrawide") && available(*uw, g, effective_version(g, s, e), s, e).ok;
     const double need = wide ? e.monitor_w / 1280.0 : std::min(e.monitor_w / 1280.0, e.monitor_h / 720.0);
     return std::clamp(static_cast<int>(std::ceil(need - 1e-9)), 1, 4);
+}
+bool performance_1080_base(Game g, const Settings& s, const Environment& e) {
+    static const char* const k_lines[kGameCount] = { "gow2_native_lines", "gow3_native_lines", "gowj_native_lines",
+                                                     "gow1_native_lines" };
+    if (!cap_exe(e, k_lines[static_cast<int>(g)]) || !cap_exe(e, "gow2_renderer_edram_extended") ||
+        !cap_exe(e, "_native_lines: UI scene viewport"))
+        return false;
+    // with Ultrawide really sent: only an exe that scales the wide picture too (as the 1080p render resolution)
+    const Option* uw = find_option(g, "Ultrawide");
+    const bool wide = uw && s.b("Ultrawide") && available(*uw, g, effective_version(g, s, e), s, e).ok;
+    return !wide || cap_exe(e, "the wide picture is scaled the same way");
 }
 namespace {
 
@@ -693,14 +771,8 @@ bool dlss_fg_present(const Environment& env) {
     return true;
 }
 
-// 0.4.9 (xefg049): Intel XeSS frame generation - the exe was built with it (a log line only GN_HAVE_XEFG builds have)
-// and Intel's two DLLs are next to it (the build copies them from the XeSS 3 SDK)
-bool xefg_present(const Environment& env) {
-    return cap_exe(env, "XeSS-FG swap chain made") && cap_file(env, "libxess_fg.dll") && cap_file(env, "libxell.dll");
-}
-
 bool framegen_choice_hidden(int index, const Environment& env) {
-    if (index == k_fgXefg) return !xefg_present(env);
+    if (index == k_fgDropped) return true;   // 0.6.6: a dropped choice - never listed
     return framegen_is_dlss(index) && !dlss_fg_present(env);
 }
 
@@ -723,7 +795,17 @@ bool fg_vk_nvidia_warning(const Settings& s, const Environment& env) {
 
 Availability framegen_choice_available(int index, const Environment& env, bool vulkan) {
     Availability a;
-    if (vulkan) {   // notes/83: AMD FSR frame generation only (DLSS-G and XeSS-FG are DirectX 12 only); experimental
+    // GitHub #397: AMD FSR frame generation on a Ryzen 5 3500U's Vega 8 (2 GB of its own, Windows) - slow, late
+    // controls, and the game ended (0xC0000409) inside AMD's library as the frame-generation context was made. Frame
+    // generation needs spare GPU time and video memory that such graphics do not have (AMD lists RX 5000 and up), so
+    // on Windows it is not offered below 3.5 GB of the card's own memory. Unknown size (0) and Proton / Wine (the
+    // Steam Deck runs it, notes/83) are left alone; DLSS has its own hardware check.
+    if (index == 1 && !env.wine && env.vram_mb && env.vram_mb < 3500) {
+        a.ok = false;
+        a.why = "Needs a graphics card with 4 GB or more of its own video memory.";
+        return a;
+    }
+    if (vulkan) {   // notes/83: AMD FSR frame generation only (DLSS-G is DirectX 12 only); experimental
         if (index >= 2) { a.ok = false; a.why = "DirectX 12 only."; }
         else if (index == 1 && (!cap_file(env, "amd_fidelityfx_framegeneration_vk.dll") ||
                                 !cap_file(env, "amd_fidelityfx_loader_vk.dll"))) {
@@ -741,14 +823,8 @@ Availability framegen_choice_available(int index, const Environment& env, bool v
     if (index == 1 && !cap_file(env, "amd_fidelityfx_framegeneration_dx12.dll")) {
         a.ok = false;
         a.why = "This build has no AMD frame generation files.";
-    } else if (index == k_fgXefg) {
-        // Intel: XeSS-FG runs on Intel Arc (discrete and integrated) and, since SDK 2.1.1, on other vendors' cards with
-        // Shader Model 6.4 (the runtime checks that and falls back). Older Intel graphics (UHD / Iris Xe) is not listed
-        // by Intel - greyed. Untested by us on every card (no Intel GPU here): experimental.
-        const std::string gpu = gpu_main(env);
-        if (!xefg_present(env)) { a.ok = false; a.why = "This build has no Intel XeSS frame generation files."; }
-        else if (env.wine) { a.ok = false; a.why = "Not under Proton / Wine."; }
-        else if (icase_search(gpu, "Intel") && !icase_search(gpu, "Arc")) { a.ok = false; a.why = "Needs an Intel Arc graphics card (or another make's DirectX 12 card)."; }
+    } else if (index == k_fgDropped) {
+        a.ok = false; a.why = "No longer offered.";
     } else if (framegen_is_dlss(index)) {
         const std::string gpu = gpu_main(env);
         const bool rtx50 = icase_search(gpu, "RTX ?50[0-9]0|RTX PRO [0-9]+ Blackwell");
@@ -785,6 +861,7 @@ const char* tab_name(Tab t) {
     case Tab::Graphics: return "Graphics";
     case Tab::Controls: return "Controls";
     case Tab::Gameplay: return "Gameplay";
+    case Tab::Audio: return "Audio";   // GitHub #425
     case Tab::Achievements: return "Achievements";   // achievements part 4
     }
     return "?";
@@ -816,11 +893,19 @@ Availability can(Game g, const std::string& f, Version ver, const Environment& e
         if (g == Game::Judgment && !cap_exe(env, "gowj_ultrawide")) return no(not_yet(2));
         if (g == Game::Gears1 && !cap_exe(env, "gow1_ultrawide")) return no(not_yet(gi, "needs its next build"));
     } else if (f == "aspect43") {   // 0.4.9: SDK patch 70; Gears 1's video-mode code is not checked yet
-        if (g == Game::Gears1) return no(not_yet(gi, "not checked yet"));
+        // 0.6.5: Gears 1 letterboxed a 16:10 mode to 16:9 (job 1969) until --gow1_no_aspect_lock (its view's constrain flag)
+        if (g == Game::Gears1 && !cap_exe(env, "gow1_no_aspect_lock")) return no(not_yet(gi, "needs its next build"));
         if (!cap_rt(env, "video_mode_widescreen")) return no(not_yet(gi, "needs the next runtime (SDK patch 70)"));
+    } else if (f == "cheatauto" || f == "cheatweapons") {   // GitHub #342: console.cpp's --ue3_cheat_* (a long literal: cap_exe)
+        if (!cap_exe(env, "GitHub #342: the HUD hidden whenever a player exists")) return no(not_yet(gi, "needs its next build"));
+        // all weapons needs the game's cheat manager: Gears 3 only makes one with its patched script package (below)
+        if (f == "cheatweapons" && g == Game::Gears3 && ver == Version::TitleUpdate && env.update_ready)
+            return no("Gears 3: not with Title Update 6 yet (it shows a dirty-disc error with it).");
     } else if (f == "cheats" && (g == Game::Gears2 || g == Game::Judgment || g == Game::Gears1)) {   // GitHub #264: --gow2_cheats / --gowj_cheats / --gow1_cheats (no package patch, so no TU check)
         // the option's description, a long literal (a short name can be built a few letters at a time - cap_exe)
-        if (!cap_exe(env, "GitHub #264: developer cheats on hotkeys")) return no(not_yet(gi, "needs its next build"));
+        // (0.6.5, #342: the description was rewritten - either text)
+        if (!cap_exe(env, "GitHub #264: developer cheats on hotkeys") && !cap_exe(env, "GitHub #264 / #342: the developers' cheat keys"))
+            return no(not_yet(gi, "needs its next build"));
     } else if (f == "cheats" || f == "mutators") {
         if (g != Game::Gears3) return no(not_yet(gi));
         if (ver == Version::TitleUpdate && env.update_ready)
@@ -931,8 +1016,15 @@ Availability can(Game g, const std::string& f, Version ver, const Environment& e
         if (!cap_file(env, "nvngx_dlss.dll")) return no(not_yet(gi, "this build has no DLSS file"));
     } else if (f == "framegen") {
         if (!cap_exe(env, "gow2_frame_generation")) return no(not_yet(gi, "needs its next build"));
-        if (!cap_file(env, "amd_fidelityfx_framegeneration_dx12.dll") && !dlss_fg_present(env) && !xefg_present(env))
-            return no(not_yet(gi, "this build has no AMD, NVIDIA or Intel frame generation files"));
+        if (!cap_file(env, "amd_fidelityfx_framegeneration_dx12.dll") && !dlss_fg_present(env))
+            return no(not_yet(gi, "this build has no AMD or NVIDIA frame generation files"));
+    } else if (f == "audiodevice" || f == "audiochannels" || f == "nightmode") {
+        // GitHub #425: the runtime's switches (SDK patch 117), by the start of each one's description (a long literal;
+        // in the runtime DLL, or in the exe of a game linked with the runtime)
+        const char* needle = f == "audiodevice" ? "The sound output device, by its name as Windows lists it"
+                             : f == "audiochannels" ? "Speaker setup: 0 = automatic"
+                                                    : "Night mode: a gentle compressor on the game's sound";
+        if (!cap_rt(env, needle) && !cap_exe(env, needle)) return no("Needs a newer COGBox build.");
     } else if (f == "mute") {
         if (!cap_exe(env, std::string(k_procNames[gi]) + "_mute_unfocused")) return no(not_yet(gi, "needs its next build"));
     } else if (f == "ao") {   // notes/80: Gears 2 and Gears 3 (s.9); notes/81: Judgment, with the fog anchor its exe sets; Gears 1 (s.14)
@@ -1167,9 +1259,16 @@ Availability available(const Option& o, Game g, Version ver, const Settings& s, 
         if (!v.ok) { a.ok = false; a.why = "DirectX 12 only for now. " + v.why; return a; }
     } else if (o.id == "FrameGen" && env.wine) { a.ok = false; a.why = env.mac ? "Not on a Mac (CrossOver)." : "Vulkan only on Proton / Wine."; return a; }
     else if (o.id == "FsrVulkan") on = runs_vulkan(s, env) && fsr_vulkan(env);      // review: opt-in, Vulkan builds with AMD's VK DLLs
-    else if (o.id == "Sharpen") on = s.i("Resolution") == 5;                         // GitHub #59: the 1080p mode only
+    else if (o.id == "Sharpen") {   // GitHub #59: the UPSCALED 1080p only (0.6.6: with Ultrawide, or an exe without true 1080p)
+        static const char* const k_nl[kGameCount] = { "gow2_native_lines", "gow3_native_lines", "gowj_native_lines", "gow1_native_lines" };
+        const bool trueLines = cap_exe(env, k_nl[static_cast<int>(g)]) && cap_exe(env, "gow2_renderer_edram_extended") &&
+                               cap_exe(env, "_native_lines: UI scene viewport") &&
+                               (!s.b("Ultrawide") || cap_exe(env, "the wide picture is scaled the same way"));
+        on = s.i("Resolution") == 5 && !trueLines;
+        if (s.i("Resolution") == 5 && trueLines) { a.ok = false; a.why = "Not needed: 1080p is drawn by the game itself."; return a; }
+    }
     else if (o.id == "Ssil" && s.i("AO") != 2 && s.i("AO") != 3) {                    // SSIL runs on XeGTAO's depth pyramid
-        a.ok = false; a.why = "Needs Ambient occlusion: XeGTAO (high or ultra)."; return a;
+        a.ok = false; a.why = "Needs Ambient occlusion: On."; return a;
     }
     else if (o.id == "SplitLayout") on = s.i("Players") == 1;                       // GitHub #136: 2 players only
     else if (o.id == "PeerIps") on = s.b("SystemLink");                              // GitHub #229
@@ -1197,19 +1296,19 @@ std::string tooltip_for(const Option& o, Game g, const Availability& a, const En
         return "On a Mac (CrossOver) the games run DirectX 12 through D3DMetal (Apple Silicon). Vulkan does not start there.";
     if (o.id == "Api" && env.wine && (g == Game::Gears3 || g == Game::Judgment))   // Shagg 3 Nov: Vulkan is the Proton path
         base = "On Steam Deck / Linux (Proton) Vulkan is the usual choice - DirectX 12 can crash there.\n"
-               "On Vulkan, DLSS / XeSS are not available and FSR is experimental (\"FSR on Vulkan (experimental)\"); otherwise SMAA is used, "
+               "On Vulkan, DLSS is not available and FSR is experimental (\"FSR on Vulkan (experimental)\"); otherwise SMAA is used, "
                "frame generation is AMD FSR only (experimental), "
                "and Reflex / Anti-Lag are off. If something looks wrong, make a problem report and send it to us.";
-    if (o.id == "AO")   // notes/81
-        base += "\nCACAO: AMD's FidelityFX CACAO at half resolution: costs much less than XeGTAO and shows less grain with DLAA and SMAA T2x, though fine contact detail is softer.";
+    if (o.id == "AO")   // 0.6.7, GitHub #406: Off is back
+        base += "\nOff: no ambient occlusion at all.";
     if (o.id == "AO" && g == Game::Judgment)   // notes/81
-        base += "\nJudgment: XeGTAO and CACAO replace the game's own AO, which can flicker with DLSS.";
+        base += "\nJudgment: On replaces the game's own AO, which can flicker with DLSS.";
     if (o.id == "DoF" && g == Game::Gears1)   // GitHub #179
         base += "\nGears 1: off turns off the game's blur pass, which the bloom uses too - the glow is softer.";
     if (o.id == "AO" && g == Game::Gears1)   // notes/80 s.14
-        base += "\nGears 1: the game has no AO of its own - XeGTAO and CACAO add it under the level's lighting, so lit areas keep their light. Off and Game's own are the same here.";
+        base += "\nGears 1: the game has no AO of its own - On adds it under the level's lighting, so lit areas keep their light.";
     if (o.id == "Ssil") {
-        base += "\nWith DLSS, FSR, XeSS or SMAA T2x it is smoother: each frame's bounce is averaged with the frames before, and "
+        base += "\nWith DLSS, FSR or SMAA T2x it is smoother: each frame's bounce is averaged with the frames before, and "
                 "light can bounce more than once.";
         if (g == Game::Gears3)
             base += "\nGears 3 draws its scene in low dynamic range, so the bounce from bright lights is gentler than in the other games.";
@@ -1218,7 +1317,7 @@ std::string tooltip_for(const Option& o, Game g, const Availability& a, const En
         base += "\nUltra's finer shadow maps follow the scene's render size: with DLSS Ultra Performance the scene is drawn at "
                 "720p and Ultra only adds samples; with DLAA or Quality it pays off.";
     if (o.id == "AO" && g == Game::Gears3)   // notes/80 s.9
-        base += "\nGears 3: most levels have their shading baked in and no real-time AO - XeGTAO adds a gentle contact shading there and replaces the game's own where a level has it.";
+        base += "\nGears 3: most levels have their shading baked in and no real-time AO - On adds a gentle contact shading there and replaces the game's own where a level has it.";
     if (o.id == "AAMode") {   // PS1 345
         std::string gpu = gpu_main(env);
         base += "\nYour graphics card: " + (gpu.empty() ? std::string("not detected") : gpu);
@@ -1264,15 +1363,15 @@ Availability wine_choice_available(const Option& o, int index, const Environment
     if (o.id == "Fullscreen" && index == 2) {
         a.ok = false;
         a.why = "Not under Proton / Wine: the Linux desktop or the Steam Deck's Game Mode owns the screen, so borderless fullscreen is used.";
+    } else if (o.id == "FrameGen" && index == k_fgDropped) {   // review 20 Nov: a dropped choice is never available
+        a.ok = false;
+        a.why = "No longer offered.";
     } else if (o.id == "AAMode" && index == 3 && !icase_search(gpu_main(env), "RTX")) {
         a.ok = false;
         a.why = "Needs an NVIDIA RTX graphics card with NVIDIA's own driver.";
     } else if (o.id == "FrameGen" && framegen_is_dlss(index)) {
         a.ok = false;
         a.why = "Not under Proton / Wine in COGBox: NVIDIA DLSS frame generation needs NVIDIA's driver, DirectX 12 and Streamline, untested on Linux.";
-    } else if (o.id == "FrameGen" && index == k_fgXefg) {
-        a.ok = false;
-        a.why = "Not under Proton / Wine.";
     } else if (env.mac && ((o.id == "Api" && index == 1) || (o.id == "WineApi" && index == 1))) {
         // independent review (r4) bug 1: on a Mac Vulkan can't start (CrossOver offers Vulkan 1.2, the renderer needs 1.3,
         // GitHub #36 / #40), yet it could be picked - or arrive in a settings.ini copied from Windows
@@ -1305,7 +1404,7 @@ std::vector<std::pair<std::string, double>> proton_recommended(Game g, const Env
 Version effective_version(Game g, const Settings& s, const Environment& env) {   // PS1 459
     if (g == Game::Judgment || g == Game::Gears1) return Version::TitleUpdate;   // one build (disc + its title update)
     if (!env.update_ready) return Version::Disc;
-    // Title updates required (0.4.0): an older saved "Disc (original release)" choice is no longer followed.
+    // Title updates required (0.4.0): an older saved choice 1 (the disc version) is no longer followed.
     (void)s;
     return Version::TitleUpdate;
 }
@@ -1321,7 +1420,7 @@ void apply_preset(Settings& s, int p) {
     static const P v[3] = {        // PS1 579-581
         { 0, 0, 0, false, false, false, 0, 0, true, true, true, 0, 100 },
         { 1, 3, 1, true, true, true, 1, 1, true, true, true, 0, 100 },   // fps: FrameCap indices (3 = 60, 5 = 120)
-        { 4, 5, 1, true, true, true, 2, 2, true, true, true, 0, 100 },
+        { 1, 5, 1, true, true, true, 2, 2, true, true, true, 0, 100 },   // 0.6.6: 2x (was Match my monitor)
     };
     const P& x = v[p];
     s.set("Preset", p);
@@ -1358,13 +1457,14 @@ static bool parse_ipv4(const std::string& t, unsigned char out[4]) {
 
 bool text_char_ok(const Option& o, unsigned c) {
     if (o.id == "PeerIps") return (c >= '0' && c <= '9') || c == '.' || c == ',' || c == ' ';
-    if (o.id == "GraphicsCard") return c >= 0x20 && c != 0x7f && c != '"';
+    if (o.id == "GraphicsCard" || o.id == "AudioDevice") return c >= 0x20 && c != 0x7f && c != '"';
     return false;   // no other text option: nothing typed is accepted
 }
 
 std::string sanitize_text(const Option& o, const std::string& in, int* dropped) {
     if (dropped) *dropped = 0;
-    if (o.kind == Kind::Text && o.id == "GraphicsCard") {   // 0.6.2 (GitHub #304): an adapter's name, kept as the game reads it
+    // 0.6.2 (GitHub #304): an adapter's name, kept as the game reads it; GitHub #425: a sound device's name, the same way
+    if (o.kind == Kind::Text && (o.id == "GraphicsCard" || o.id == "AudioDevice")) {
         std::string out;
         for (unsigned char ch : in) if (ch >= 0x20 && ch != 0x7f && ch != '"') out += static_cast<char>(ch);
         out = trim(out);
@@ -1408,6 +1508,21 @@ bool graphics_card_present(const Environment& env, const std::string& name) {   
     if (name.empty()) return false;
     const std::string want = low(name);
     for (const std::string& n : env.graphics_cards) if (low(n) == want) return true;
+    return false;
+}
+
+bool audio_device_present(const Environment& env, const std::string& name) {   // GitHub #425
+    // both sides as they would be saved (review: a listed name with a quote or a tab is kept without it)
+    const Option* o = find_option(Game::Gears2, "AudioDevice");
+    if (!o) return false;
+    auto low = [&](const std::string& t) {
+        std::string c = sanitize_text(*o, t);
+        for (char& ch : c) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return c;
+    };
+    const std::string want = low(name);
+    if (want.empty()) return false;
+    for (const std::string& n : env.audio_devices) if (low(n) == want) return true;
     return false;
 }
 
@@ -1465,6 +1580,16 @@ Settings Store::view(Game g, const Environment& env) const {
         s.set(o.id, clamp_value(o, x, &env));   // PS1 300 / 431 / 437-438 clamping
     }
     s.set("Version", static_cast<int>(effective_version(g, s, env)));   // PS1 459
+    // 0.6.6: "Match my monitor" (4) is gone - a saved 4 is the whole-number scale it picked on this screen (1x-4x)
+    if (s.i("Resolution") == 4) s.set("Resolution", std::clamp(expected_render_scale(g, s, env), 1, 4) - 1);
+    // 0.6.6 (Shagg 20 Nov): the dropped upscaler (AAMode 4) and its frame generation (FrameGen 7) keep their numbers so the others keep their
+    // meaning, but they are no longer offered; a saved 4 becomes SMAA, a saved frame generation 7 AMD's (what the
+    // game fell back to when Intel's could not run).
+    if (s.i("AAMode") == 4) s.set("AAMode", 1);
+    if (s.i("FrameGen") == k_fgDropped) s.set("FrameGen", 1);
+    // 0.6.6: Ambient occlusion was Default / On. 0.6.7 (GitHub #406, Shagg 21 Nov): Off (0) is offered again, so a
+    // saved Off stays Off; a saved Ultra or CACAO still becomes On
+    if (s.i("AO") >= 3) s.set("AO", 2);
     if ((g == Game::Judgment || g == Game::Gears1) && s.i("FpsMode") == 3) s.set("FpsMode", 0); // PS1 475
     if (g == Game::Gears1 && !gears1_lang(s.i("Lang"))) s.set("Lang", 0);   // a language Gears 1 has no text for
     return s;
@@ -1514,6 +1639,10 @@ bool Store::load_ini(const std::string& text) {
     // FrameCap list version per section (0 = [General]); only FrameCap values read from a file without
     // "FrameCapList=2" are moved over, once, after reading (values from the old "Fps" are already list 2).
     bool capList2[kGameCount + 1] = {}, capRead[kGameCount + 1] = {};
+    // 0.6.5: the old 6-step "DeadZone" choice (both sticks) goes into each slider not saved in the file itself
+    int oldDeadZone = -1;
+    bool dzRead[2] = {};
+    int oldRadial = 0;   // GitHub #377: the "Radial stick dead zone" choice (0.6.x) goes into the right slider when that is 0
     // The PS1's flat keys (launcher-settings.json converted to key=value) are read in [General] too.
     struct Legacy { const char* key; int game; const char* id; };
     static const Legacy legacy[] = {
@@ -1555,6 +1684,10 @@ bool Store::load_ini(const std::string& text) {
                 continue;
             }
             if (key == "FrameCapList") { capList2[0] = x >= 2; continue; }
+            if (key == "DeadZone") { oldDeadZone = std::max(0, std::min(5, static_cast<int>(x))); any = true; continue; }
+            if (key == "RadialDZ") { oldRadial = std::max(0, std::min(5, static_cast<int>(x))); any = true; continue; }
+            if (key == "DeadZoneL") dzRead[0] = true;
+            if (key == "DeadZoneR") dzRead[1] = true;
             if (key == "BrightnessDefault") continue;   // 0.6.1: the setting is gone (see the top of this file)
             if (key == "FrameCap") { top["FrameCap"] = x; capRead[0] = true; any = true; continue; }
             if (key == "Fps") {   // job 638: the old 4-step frame rate limit (the shared value)
@@ -1593,6 +1726,15 @@ bool Store::load_ini(const std::string& text) {
         }
     }
     if (capRead[0] && !capList2[0]) top["FrameCap"] = old_cap_list1_to_2(top["FrameCap"]);
+    if (oldDeadZone >= 0) {
+        if (!dzRead[0]) top["DeadZoneL"] = std::round(k_deadValue[oldDeadZone] * 100.0);
+        if (!dzRead[1]) top["DeadZoneR"] = std::round(k_deadValue[oldDeadZone] * 100.0);
+    }
+    if (oldRadial > 0) {
+        static const int k_radialPct[6] = { 0, 8, 12, 16, 20, 25 };
+        auto it = top.find("DeadZoneR");
+        if (it == top.end() || it->second < 1) top["DeadZoneR"] = k_radialPct[oldRadial];
+    }
     for (int g = 0; g < kGameCount; ++g)
         if (capRead[g + 1] && !capList2[g + 1]) per[g]["FrameCap"] = old_cap_list1_to_2(per[g]["FrameCap"]);
     // 0.6.1: a saved Brightness (shared or per game) is dropped, so it is not written back either.
@@ -1687,7 +1829,26 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     // 0.3.0: "Start at" removed (see the option list) - the game always opens at its own main menu.
     // PS1 837-842: render resolution ("Match my monitor" = scale 0 + native size; counts as 2x below)
     int scale = s.i("Resolution") + 1;
-    if (scale == 6) {   // 0.2.0 "1080p": 720p drawn, upscaled to the window (Lanczos) and sharpened (RCAS)
+    // 0.6.6 (Shagg 20 Nov: "I want the 1080p replaced with the true 1080p"): the 1080p choice makes the GAME draw
+    // 1920x1080 (--gowN_native_lines=1080 into the extended EDRAM) instead of 720p upscaled. Judgment / Gears 1 with
+    // Ultrawide (their wide hooks are not scaled yet) and an exe without the switch keep the old upscaled 1080p below.
+    static const char* const k_nativeLines[kGameCount] = { "gow2_native_lines", "gow3_native_lines", "gowj_native_lines",
+                                                           "gow1_native_lines" };
+    // With Ultrawide: only an exe that scales the wide picture too (Gears 2 / Gears 3 since 0.6.6 - its description says so).
+    // Job 2189 (20 Nov): at true 1080p the games' own menus (pause, front end) stayed 1280x720 in the top-left corner
+    // in all four games. Only an exe that lays its menus out for the larger screen gets true 1080p - it carries the
+    // log text "_native_lines: UI scene viewport" (Gears 2 since 5010144); the others keep the upscaled 1080p.
+    // GitHub #436: 768p (choice 6) and 900p (choice 7) take the same true-lines path at their own height
+    const int lines = scale == 6 ? 1080 : scale == 7 ? 768 : scale == 8 ? 900 : 0;
+    const bool true1080 = lines > 0 && cap_exe(env, k_nativeLines[gi]) && cap_exe(env, "gow2_renderer_edram_extended") &&
+                          cap_exe(env, "_native_lines: UI scene viewport") &&
+                          (!(avail("Ultrawide") && on("Ultrawide")) || cap_exe(env, "the wide picture is scaled the same way"));
+    if (true1080) {
+        a.insert(a.end(), { "--gow2_renderer_resolution_scale=1", std::string("--") + k_nativeLines[gi] + "=" + std::to_string(lines),
+                            "--gow2_renderer_edram_extended=true", "--gow2_present_native_size=true" });
+        notes.push_back("launcher: " + std::to_string(lines) + "p - the game draws it itself");
+        scale = 1;
+    } else if (lines > 0) {   // 0.2.0 "1080p" (#436: also 768p / 900p without true lines): 720p drawn, upscaled to the window (Lanczos) and sharpened (RCAS)
         a.insert(a.end(), { "--gow2_renderer_resolution_scale=1", "--gow2_present_native_size=true",
                             "--gow2_present_upscale_filter=lanczos" });
         // GitHub #59: Automatic sharpens except under Wine; On / Off are the player's
@@ -1709,23 +1870,28 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     if (isG3) {
         if (scale > 1) a.push_back("--gow2_renderer_resolution_scale_threshold=1120");
 
-        if (avail("HordeBots") && on("HordeBots")) a.push_back("--gow3_horde_bots=true");   // GitHub #89
+        if (avail("HordeBots") && on("HordeBots")) {
+            a.push_back("--gow3_horde_bots=true");   // GitHub #89
+            // 0.6.5 (Discord: four Horde bots all Marcus): bots added mid-match load the character they're named after
+            if (cap_exe(env, "gow3_horde_bot_characters")) a.push_back("--gow3_horde_bot_characters=true");
+        }
         // GitHub #105: the depth-of-field chain's half-size targets (pitch 640) follow the scale despite the threshold
         if (scale > 1 && avail("DofScale") && on("DofScale")) a.push_back("--gow2_renderer_resolution_scale_pitches=640");
         a.push_back("--gow2_renderer_memexport=true");
-        if (s.i("Resolution") >= 4 && !s.b("Ultrawide")) {
+        if (s.i("Resolution") >= 4 && s.i("Resolution") <= 5 && !s.b("Ultrawide") && !true1080) {   // (not with true 1080p: --gow3_native_lines excludes it)
             if (cap_exe(env, "gow3_aspect")) a.push_back("--gow3_aspect=auto");
             else notes.push_back("launcher: this Gears 3 build has no --gow3_aspect yet - the picture stays 16:9");
         }
     }
-    // PS1 851-855: anti-aliasing; DLSS needs an RTX card, FSR / DLSS / XeSS their DLL next to the exe, else SMAA
+    // PS1 851-855: anti-aliasing; DLSS needs an RTX card, FSR / DLSS their DLL next to the exe, else SMAA
     int aa = s.i("AAMode");
     {
         const std::vector<std::string> gpus = gpu_list(env);
         bool hasRtx = false;
         for (const std::string& n : gpus) if (icase_search(n, "RTX")) hasRtx = true;
         if (aa == 3 && !hasRtx && !gpus.empty()) { notes.push_back("launcher: DLSS needs an NVIDIA RTX card (" + gpu_main(env) + ") - FSR instead"); aa = 2; }
-        static const char* const need[5] = { "", "", "amd_fidelityfx_loader_dx12.dll", "nvngx_dlss.dll", "libxess.dll" };
+        if (aa == 4) aa = 1;   // review 20 Nov: the dropped upscaler (a raw 4 from the in-game menu) is SMAA
+        static const char* const need[5] = { "", "", "amd_fidelityfx_loader_dx12.dll", "nvngx_dlss.dll", "" };
         if (aa == 5 && ((g != Game::Gears2 && g != Game::Gears3) || !cap_exe(env, "smaa_t2x"))) {   // notes/80 s.7: ours, in the Gears 2 exe from 0.3.x
             notes.push_back("launcher: SMAA T2x is not in this game / build - SMAA instead"); aa = 1;
         }
@@ -1771,20 +1937,35 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
             if (m >= 1 && m <= 4 && avail("DlssModel")) a.push_back(std::string("--gow2_dlss_preset=") + k_model[m]);
             break;
         }
-        case 4: a.push_back("--gow2_upscaler=xess"); break;
         case 5: a.push_back("--gow2_upscaler=smaa_t2x"); break;   // notes/80 s.7
         default: break;
         }
     }
     // PS1 856 (patch 0142): scene resolution, with an upscaler that is really used
+    bool perf1080 = false;     // 4K + Performance from the true-1080p base (below)
+    int scene_scale = scale;   // the scale the 3D scene is drawn at: lower than `scale` in an upscaling mode
     {
         static const char* const modes[4] = { "", "--gow2_upscale_mode=quality", "--gow2_upscale_mode=performance", "--gow2_upscale_mode=ultra" };
         int m = s.i("SceneMode");
         if (aa >= 2 && aa <= 4 && avail("SceneMode") && m > 0 && m < 4) a.push_back(modes[m]);
-        // to-do 18 (GitHub #98): with the scene at full size the upscaler only anti-aliases (DLSS = DLAA, FSR / XeSS =
+        // 4K + Performance: 3x of 720 lines has no whole-number half, so the upscaler only anti-aliased there. The same
+        // 3840x2160 comes out of 2x of the game's own 1080 lines (true 1080p), and Performance is then 2x -> 1x: the
+        // upscaler really gets a 1920x1080 scene. Only for an exe the 1080p render resolution is offered for.
+        if (aa >= 2 && aa <= 4 && avail("SceneMode") && m == 2 && scale == 3 && performance_1080_base(g, s, env)) {
+            for (std::string& x : a)
+                if (x == "--gow2_renderer_resolution_scale=3") x = "--gow2_renderer_resolution_scale=2";
+            a.insert(a.end(), { std::string("--") + k_nativeLines[gi] + "=1080", "--gow2_renderer_edram_extended=true" });
+            notes.push_back("launcher: 4K with Scene resolution Performance - the game draws 1920x1080 itself and the "
+                            "picture is 2x of that (3840x2160), so the upscaler gets a 1920x1080 scene");
+            perf1080 = true;
+            scene_scale = 1;
+        } else if (aa >= 2 && aa <= 4 && avail("SceneMode") && scene_mode_fits(m, scale)) {
+            scene_scale = m == 1 ? 2 : m == 2 ? scale / 2 : 1;   // Quality 3x -> 2x, Performance 2x -> 1x / 4x -> 2x, Ultra 3x -> 1x
+        }
+        // to-do 18 (GitHub #98): with the scene at full size the upscaler only anti-aliases (DLSS = DLAA, FSR =
         // native AA) - say so, so nobody expects more frames from it
         if (aa >= 2 && aa <= 4 && !(avail("SceneMode") && m > 0 && m < 4)) {
-            static const char* const aaOnly[5] = { "", "", "FSR native AA", "DLAA", "XeSS native AA" };
+            static const char* const aaOnly[5] = { "", "", "FSR native AA", "DLAA", "" };
             notes.push_back(std::string("launcher: ") + k_aaNames[aa] + " with Scene resolution Native runs as " + aaOnly[aa] +
                             " - anti-aliasing only, no extra frames; pick a lower Scene resolution for more frames (GitHub #98)");
         }
@@ -1794,7 +1975,7 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
         // #345: "Match my monitor" too, with the scale the game will pick (4K: 3x, so Performance there was DLAA unsaid).
         if (aa >= 2 && aa <= 4 && avail("SceneMode") && m > 0 && m < 4) {
             const int out = expected_render_scale(g, s, env);
-            const bool fits = scene_mode_fits(m, out);
+            const bool fits = scene_mode_fits(m, out, perf1080);
             if (!fits) {
                 static const char* const mname[4] = { "", "Quality", "Performance", "Ultra performance" };
                 notes.push_back(std::string("launcher: Scene resolution ") + mname[m] + " has no whole-number scene size at render "
@@ -1804,18 +1985,18 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
         }
     }
     // PS1 857 (0146 / 0147): frame generation
-    // FrameGen: 1 AMD FSR; 2-5 NVIDIA DLSS 2x / 3x / 4x / dynamic, 6 NVIDIA DLSS 6x (0.4.9); 7 Intel XeSS 2x (0.4.9,
-    // experimental) (DLSS / XeSS fall back to FSR, or off, when not available here)
+    // FrameGen: 1 AMD FSR; 2-5 NVIDIA DLSS 2x / 3x / 4x / dynamic, 6 NVIDIA DLSS 6x (0.4.9); 7 dropped (DLSS fall back to FSR, or off, when not available here)
     // job 521: DirectX 12 (not under Proton / Wine); notes/83: AMD's on Vulkan too, Proton / Wine included (Steam Deck)
     const bool fgVk = runs_vulkan(s, env);
     int fgChoice = avail("FrameGen") && (fgVk || (s.i("Api") == 0 && !env.wine)) ? s.i("FrameGen") : 0;
+    if (fgChoice == k_fgDropped) fgChoice = 1;   // (Store::view already does this; a raw 7 is AMD's too)
     if (fgVk && fgChoice >= 2) {
-        notes.push_back(std::string("launcher: Vulkan - ") + (fgChoice == k_fgXefg ? "Intel XeSS" : "NVIDIA DLSS") +
+        notes.push_back(std::string("launcher: Vulkan - NVIDIA DLSS") +
                         " frame generation is DirectX 12 only -> AMD FSR frame generation (experimental on Vulkan)");
         fgChoice = 1;
     }
     if (fgChoice >= 2 && !framegen_choice_available(fgChoice, env).ok) {
-        const char* what = fgChoice == k_fgXefg ? "Intel XeSS" : "NVIDIA DLSS";
+        const char* what = "NVIDIA DLSS";
         fgChoice = cap_file(env, "amd_fidelityfx_framegeneration_dx12.dll") ? 1 : 0;
         notes.push_back(std::string("launcher: ") + what + " frame generation is not available here -> " + (fgChoice ? "AMD FSR frame generation" : "off"));
     }
@@ -1825,12 +2006,10 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
         fgChoice = 0;
     }
     const bool fgOn = fgChoice >= 1;
-    // frames on screen per frame drawn (the frame-rate cap below); dynamic varies - counted as 2x; Intel XeSS: 2x
+    // frames on screen per frame drawn (the frame-rate cap below); dynamic varies - counted as 2x
     const int fgFactor = fgChoice == 3 ? 3 : fgChoice == 4 ? 4 : fgChoice == 6 ? 6 : 2;
     if (fgOn) {
-        if (fgChoice == k_fgXefg) {
-            a.push_back("--gow2_frame_generation=xess");   // 0.4.9 (xefg049): 2x with XeLL; the exe falls back to FSR itself
-        } else if (framegen_is_dlss(fgChoice)) {
+        if (framegen_is_dlss(fgChoice)) {
             static const char* const k_dlssMode[5] = { "2x", "3x", "4x", "dynamic", "6x" };   // 0.4.9: 6x
             a.push_back("--gow2_frame_generation=dlss");
             a.push_back(std::string("--gow2_dlss_fg_mode=") + k_dlssMode[fgChoice - 2]);
@@ -1861,22 +2040,41 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     const bool realOcclusion = (s.i("Api") == 0 || vkQueries) && !env.wine && g != Game::Gears1 &&
                                (g != Game::Gears2 || cap_exe(env, "gow2_renderer_queries"));
     if (realOcclusion) a.push_back("--gow2_renderer_queries=strict");
+    // 0.6.6 speed set (Shagg 20 Nov: "all four gears games need to have the same speed up gears 2 has"): the speed
+    // study's renderer switches, which took Gears 2 chapter 9 at 1440p from about 8 ms a frame to about 5 (jobs 2146 /
+    // 2161: 5.04 / 4.96 ms). Since 0.6.6 they are also the renderer's own defaults; passing them keeps an exe built
+    // before that fast too. Each is passed only when the exe has it. (Not the fused scaled resolve: Shagg, 14 Nov.) Pictures were checked in Gears 2 (pause menu and gameplay); Gears 1,
+    // Gears 3 and Judgment still need their picture check in a gameplay run before a release.
+    {
+        const bool vk = runs_vulkan(s, env);
+        static const char* const k_speed[][2] = {
+            { "gow2_renderer_ps_no_alpha_variant", "--gow2_renderer_ps_no_alpha_variant=true" },
+            { "gow2_renderer_tex_post_skip", "--gow2_renderer_tex_post_skip=true" },
+            { "gow2_renderer_tex_frac16", "--gow2_renderer_tex_frac16=false" },
+            { "gow2_renderer_ps_r21", "--gow2_renderer_ps_r21=false" },
+            { "gow2_renderer_vertex_watch_min_bytes", "--gow2_renderer_vertex_watch_min_bytes=256" },
+            { "gow2_renderer_front_copy_lean", "--gow2_renderer_front_copy_lean=true" },
+        };
+        for (const auto& k : k_speed) if (cap_exe(env, k[0])) a.push_back(k[1]);
+        if (!vk && cap_exe(env, "gow2_present_gamma_to_smaa")) a.push_back("--gow2_present_gamma_to_smaa=true");   // D3D12 only
+    }
     // Notes/80: XeGTAO (2 high, 3 ultra); notes/81: CACAO (4); 0 Off goes through the game's own [SystemSettings] below,
     // 1 changes nothing
     if (avail("AO") && s.i("AO") >= 2) {
-        if (s.i("AO") == 4 && !cap_exe(env, "or cacao (FidelityFX CACAO")) {
-            notes.push_back("launcher: CACAO is not in this build - the game's own AO");
-        } else {
+        {   // 0.6.6: CACAO (4) is dropped - Store::view turns a saved 4 into On, and the launcher never asks for it
             a.push_back("--gow2_ao=gtao");
-            if (s.i("AO") == 4) {   // low, with the blur passes that looked best in play
-                a.push_back("--gow2_ao_algo=cacao");
-                a.push_back("--gow2_ao_quality=low");
-                a.push_back("--gow2_ao_cacao_blur=3");
-            } else {
+            {
                 a.push_back(s.i("AO") == 3 ? "--gow2_ao_quality=ultra" : "--gow2_ao_quality=high");
                 // Shagg's to-do 1(d) (XeGTAO ~5 ms/frame): High denoises twice (medium); Ultra leaves it to the game's
-                // automatic choice (#204: 2 without DLSS / FSR / XeSS, by the scene scale with one)
-                if (s.i("AO") == 2) a.push_back("--gow2_ao_denoise=2");
+                // automatic choice (#204: 2 without DLSS / FSR, by the scene scale with one)
+                // 0.6.6: On = high at half resolution where the build has it (job 2169: half the cost, the game picture
+                // 0.16 / 255 apart on average) - as measured there, with the build's own denoise; otherwise as before
+                // Half resolution only for a scene of 2x or more. XeGTAO runs at the scene's size; at 1x
+                // (720p, 1080p, and the 1x scene of Performance at 1440p / 4K or Ultra performance) its half is 640x360
+                // or 960x540 - smeared, with patches that crawl from frame to frame - and the full-size pass is cheap
+                // there. Those get the full-size High as before 0.6.6.
+                if (s.i("AO") == 2 && cap_exe(env, "gow2_ao_half") && scene_scale >= 2) a.push_back("--gow2_ao_half=true");
+                else if (s.i("AO") == 2) a.push_back("--gow2_ao_denoise=2");
             }
         }
     }
@@ -1887,6 +2085,8 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     if (avail("SoftShadows") && s.i("SoftShadows") >= 1) a.push_back(s.i("SoftShadows") == 2 ? "--gow2_pcss=ultra" : "--gow2_pcss=high");
     // PS1 858: 16x anisotropic
     if (on("Aniso")) a.push_back(gi == 0 ? "--gow2_patch_aniso16=true" : gi == 1 ? "--gow3_patch_aniso16=true" : isG1 ? "--gow1_aniso16=true" : "--gowj_aniso16=true");
+    // (0.6.6: no "Skip Coalesced*.bin check" box - --gow2_patch_skip_coalesced_check is on by default in the game, so
+    // the box changed nothing whether ticked or not; edited Coalesced files load in Gears 2 either way.)
     // PS1 860-864: texture pool (-1 = the port's own default; Judgment then 200)
     if (avail("Pool")) {
         int mb = k_poolMb[std::max(0, std::min(3, s.i("Pool")))];
@@ -1924,8 +2124,19 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     if (on("Cheats")) a.push_back(g == Game::Gears2 ? "--gow2_cheats=true" : g == Game::Judgment ? "--gowj_cheats=true" :
                                   g == Game::Gears1 ? "--gow1_cheats=true" : "--gow3_cheats=true");   // #264: Gears 2, Judgment, Gears 1 too
     if (on("Mutators")) a.push_back("--gow3_unlock_mutators=true");
+    // GitHub #342: the cheats that are simply on (console.cpp --ue3_cheat_*, every game)
+    if (on("CheatGod")) a.push_back("--ue3_cheat_god=true");
+    if (on("CheatWeapons")) a.push_back("--ue3_cheat_weapons=true");
+    if (avail("CheatSpeed") && s.i("CheatSpeed") > 0) {
+        static const char* const k_speed[4] = { "1", "0.75", "0.5", "0.25" };
+        a.push_back(std::string("--ue3_cheat_speed=") + k_speed[std::max(0, std::min(3, s.i("CheatSpeed")))]);
+    }
+    if (on("CheatHud")) a.push_back("--ue3_cheat_hide_hud=true");
     if (kOfferFirstPerson && on("FirstPerson")) a.push_back(g == Game::Gears2 ? "--gow2_first_person=true" : g == Game::Judgment ? "--gowj_first_person=true" :
                                        "--gow3_first_person=true");
+    // GitHub #377: can this start replace binding text (as mouseLook's condition), and which sticks' sliders are on
+    const bool dzBind = (!isG1 || cap_exe(env, "gow1_ini_edits")) && !(g == Game::Gears2 && !useUpdate && !env.g2_disc_ini_edits);
+    const bool dzLeft = s.i("DeadZoneL") > 0 && !s.b("Mnk"), dzRight = s.i("DeadZoneR") > 0;
     // PS1 873-898: the game's own engine settings through --ue3_ini_edits
     {
         const std::string ei = k_engineIni[gi];
@@ -2022,21 +2233,22 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
         // full stick. With keyboard and mouse on, the binding gets no dead zone and k_lookBoost x the speed; the mouse is
         // scaled down by the same factor (same feel, 4x the ceiling) and a controller used alongside gets both undone by
         // the SDK (patch 38: pad_look_scale / pad_look_deadzone). Each game's own binding text, from its Coalesced_int.
-        // GitHub #95: with the radial dead zone on, Gears 1 and 2's look binding loses its own per-axis dead zone (the
-        // same binding text the mouse-look edits below replace; Speed unchanged). Not with mouseLook, which does it too.
-        if (!mouseLook && avail("RadialDZ") && s.i("RadialDZ") > 0 && (g == Game::Gears2 || isG1)) {
-            if (g == Game::Gears2) {
-                const std::string fi = "GearInput.ini|Engine.PlayerInput|~=";
-                ini.push_back(fi + "Axis aTurn Speed=1.0 DeadZone=0.3>Axis aTurn Speed=1.0 DeadZone=0.0");
-                ini.push_back(fi + "Axis aLookup Speed=0.75 DeadZone=0.3>Axis aLookup Speed=0.75 DeadZone=0.0");
-                ini.push_back(fi + "Axis aLookup Speed=-0.75 DeadZone=0.3>Axis aLookup Speed=-0.75 DeadZone=0.0");
-            } else {
-                const std::string fi = "WarInput.ini|Engine.PlayerInput|~=";
-                ini.push_back(fi + "Axis aTurn Speed=1.0 DeadZone=0.2>Axis aTurn Speed=1.0 DeadZone=0.0");
-                ini.push_back(fi + "Axis aLookup Speed=0.8 DeadZone=0.2>Axis aLookup Speed=0.8 DeadZone=0.0");
-                ini.push_back(fi + "Axis aTurn Speed=1.0 DeadZone=0.3>Axis aTurn Speed=1.0 DeadZone=0.0");
-                ini.push_back(fi + "Axis aLookup Speed=0.75 DeadZone=0.3>Axis aLookup Speed=0.75 DeadZone=0.0");
+        // GitHub #377 (was #95's radial choice): with a stick's slider at 1 or more, the game's own per-axis dead zone
+        // leaves that stick's bindings, so the slider's round one (sent below) is the only one. Each game's own binding
+        // text (job 2121b, 19 Nov, from its Coalesced; Speed unchanged). Camera: not with mouseLook, whose edits below
+        // do it too; Gears 3's camera binding has none. Movement: not with keyboard and mouse on (the walk key's stick
+        // values were tuned against the game's own dead zone).
+        if (dzBind) {
+            const std::string fi = std::string(isG1 ? "WarInput.ini" : "GearInput.ini") + "|Engine.PlayerInput|~=";
+            auto zero = [&](const char* axis, const char* speed, const char* dz) {
+                ini.push_back(fi + "Axis " + axis + " Speed=" + speed + " DeadZone=" + dz + ">Axis " + axis + " Speed=" + speed + " DeadZone=0.0");
+            };
+            if (dzRight && !mouseLook) {
+                if (g == Game::Gears2) { zero("aTurn", "1.0", "0.3"); zero("aLookup", "0.75", "0.3"); zero("aLookup", "-0.75", "0.3"); }
+                else if (isG1) { zero("aTurn", "1.0", "0.2"); zero("aLookup", "0.8", "0.2"); zero("aTurn", "1.0", "0.3"); zero("aLookup", "0.75", "0.3"); }
+                else if (isGJ) { zero("aTurn", "1.0", "0.2"); zero("aLookup", "1.0", "0.2"); zero("aLookup", "-1.0", "0.2"); }
             }
+            if (dzLeft) { zero("aBaseY", "1.0", "0.3"); zero("aBaseY", "-1.0", "0.3"); zero("aStrafe", "1.0", "0.3"); }
         }
         if (mouseLook) {
             const std::string fi = "GearInput.ini|Engine.PlayerInput|~=";
@@ -2079,7 +2291,11 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     // GitHub #60: the picture widens to the monitor's own shape (21:9, 32:9...), not a fixed 21:9, when the build can
     if (on("Ultrawide")) {
         const char *k = isG3 ? "gow3_aspect" : isGJ ? "gowj_aspect" : isG1 ? "gow1_aspect" : "gow2_aspect";
-        if (cap_exe(env, k)) a.push_back(std::string("--") + k + "=auto");
+        // 0.6.6 (review #24): "auto" in the game measures the main monitor (the window doesn't exist yet); the launcher
+        // knows the monitor chosen in Display > Monitor, so its own shape is passed ("3440:1440"). auto when unknown.
+        const std::string shape = env.monitor_w > 0 && env.monitor_h > 0
+                                      ? std::to_string(env.monitor_w) + ":" + std::to_string(env.monitor_h) : std::string("auto");
+        if (cap_exe(env, k)) a.push_back(std::string("--") + k + "=" + shape);
     }
     if (on("Ultrawide")) a.push_back(isG3 ? "--gow3_ultrawide=true" : isGJ ? "--gowj_ultrawide=true" : isG1 ? "--gow1_ultrawide=true" : "--gow2_ultrawide=true");
     // 0.4.9: 4:3 (SDK patch 70). Gears 2 / 3 / Judgment make a 4:3 back buffer (720 x w / h wide) only for a mode that is
@@ -2092,16 +2308,36 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
         constexpr bool kAuto43 = false;
         const bool screen43 = kAuto43 && env.monitor_w > 0 && env.monitor_h > 0 && env.monitor_w >= env.monitor_h &&
                               env.monitor_w * 10 <= env.monitor_h * 14;   // landscape, <= 1.4:1
+        // 0.6.5: 16:10 = a landscape screen between 1.55:1 and 1.65:1 (1280x800, 1440x900, 1680x1050, 1920x1200, 2560x1600)
+        const bool screen1610 = env.monitor_w > 0 && env.monitor_h > 0 && env.monitor_w * 100 >= env.monitor_h * 155 &&
+                                env.monitor_w * 100 <= env.monitor_h * 165;
         if (ar == 2 || (ar == 0 && screen43)) {
             a.push_back("--video_mode_width=960");
             a.push_back("--video_mode_height=720");
             a.push_back("--video_mode_widescreen=false");
             if (ar == 0) notes.push_back("launcher: Aspect ratio Auto: " + std::to_string(env.monitor_w) + "x" + std::to_string(env.monitor_h) + " screen -> 4:3");
+        } else if (ar == 3 || (ar == 0 && screen1610)) {
+            a.push_back("--video_mode_width=1152");
+            a.push_back("--video_mode_height=720");
+            a.push_back("--video_mode_widescreen=false");
+            if (ar == 0) notes.push_back("launcher: Aspect ratio Auto: " + std::to_string(env.monitor_w) + "x" + std::to_string(env.monitor_h) + " screen -> 16:10");
         }
+        if (isG1 && (ar == 2 || ar == 3 || (ar == 0 && (screen43 || screen1610)))) a.push_back("--gow1_no_aspect_lock=true");
     }
     // PS1 900: HDR
     if (s.b("HDR")) {
         a.push_back("--present_hdr=true");
+        // Judgment and Gears 1's native scene paths are opt-in; HDR output alone uses legacy expansion.
+        if (isGJ || isG1) {
+            const std::string native = isGJ ? "gowj_hdr_native" : "gow1_hdr_native";
+            if (cap_exe(env, native)) {
+                a.push_back("--" + native + "=true");
+                if (cap_exe(env, "gow2_hdr_ui_automatic")) a.push_back("--gow2_hdr_ui_automatic=true");
+            } else {
+                notes.push_back(std::string("launcher: ") + (isGJ ? "Judgment" : "Gears 1") +
+                                " native HDR needs a game build with " + native + " support - legacy HDR output instead");
+            }
+        }
         a.push_back("--gow2_hdr_paper_white=" + std::to_string(s.i("PaperWhite")));
         a.push_back("--gow2_hdr_peak=" + std::to_string(s.i("Peak")));
         if ((g == Game::Gears2 || g == Game::Gears3) && cap_exe(env, "gow2_hdr_highlights") && s.i("HdrHighlights") != 2) {
@@ -2116,23 +2352,19 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     if (s.i("Fullscreen") >= 1) { a.push_back("--fullscreen=true"); if (s.i("Fullscreen") == 2 && !env.wine) a.push_back("--fullscreen_exclusive=true"); }
     else {
         a.push_back("--fullscreen=false");   // GitHub #81/#67: the ports default to full screen; windowed must say so
-        int w = std::max(0, std::min(5, s.i("WindowSize")));
+        int w = std::max(0, std::min(6, s.i("WindowSize")));
         if (w > 0) { a.push_back("--window_width=" + std::to_string(k_winSizes[w][0])); a.push_back("--window_height=" + std::to_string(k_winSizes[w][1])); }
     }
     // PS1 904-908: stick dead zone, vibration
     {
-        int d = std::max(0, std::min(5, s.i("DeadZone")));
-        if (d > 0) { std::string dz = fmt_double(k_deadValue[d]); a.push_back("--left_stick_deadzone_percentage=" + dz); a.push_back("--right_stick_deadzone_percentage=" + dz); }
+        const int l = std::max(0, std::min(50, s.i("DeadZoneL"))), r = std::max(0, std::min(50, s.i("DeadZoneR")));
+        if (l > 0) a.push_back("--left_stick_deadzone_percentage=" + fmt_double(l / 100.0));
+        if (r > 0) a.push_back("--right_stick_deadzone_percentage=" + fmt_double(r / 100.0));
     }
     if (!s.b("Vibration")) a.push_back("--vibration=false");
     if (on("AdaptiveTriggers")) a.push_back("--pad_adaptive_triggers=true");   // GitHub #245 (greyed: never sent)
     if (on("TriggerRumble")) a.push_back("--pad_trigger_rumble=true");         // 0.6.3, GitHub #245 (greyed: never sent)
-    // GitHub #95 / #97 (SDK patch 55): radial dead zone and controller layout
-    if (avail("RadialDZ")) {
-        static const double k_radial[6] = { 0, 0.08, 0.12, 0.16, 0.20, 0.25 };
-        const int r = std::max(0, std::min(5, s.i("RadialDZ")));
-        if (r > 0) a.push_back("--pad_radial_deadzone=" + fmt_double(k_radial[r]));
-    }
+    // GitHub #97 (SDK patch 55): controller layout (#95's radial dead zone is the right stick's slider now, #377)
     if (avail("PadLayout")) {
         const int l = std::max(0, std::min(4, s.i("PadLayout")));
         const std::string clean = pad_remap_clean(l < 4 ? std::string(pad_layout_preset(l)) : env.pad_remap);   // 0.6.3: shared
@@ -2153,6 +2385,21 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
     }
     // PS1 926-928: mute, monitor, players
     if (on("Mute")) a.push_back(std::string("--") + k_procNames[gi] + "_mute_unfocused=true");
+    // GitHub #425 (SDK patch 117): the Audio tab - only what differs from the runtime's default (system default device,
+    // Automatic, night mode off), and only to a runtime that has the switch. A chosen device is sent even when the
+    // launcher doesn't see it now (review: it may be plugged in by the time the game starts, and the runtime falls back
+    // to the default device itself when it isn't there); only the AUDIO tab says it is missing.
+    if (avail("AudioDevice")) {
+        const Option* ao = find_option(g, "AudioDevice");
+        const std::string dev = ao ? sanitize_text(*ao, s.str("AudioDevice")) : std::string();
+        if (!dev.empty()) a.push_back("--audio_output_device=" + q(dev));
+    }
+    if (avail("AudioChannels")) {
+        static const int k_channels[5] = { 0, 1, 2, 6, 8 };   // Automatic, Mono, Stereo, 5.1, 7.1
+        const int c = std::max(0, std::min(4, s.i("AudioChannels")));
+        if (c > 0) a.push_back("--audio_channels=" + std::to_string(k_channels[c]));
+    }
+    if (on("NightMode")) a.push_back("--audio_night_mode=true");
     {   // 0.2.0 (#4, Shagg 12:55: every language the US and European releases use): the console's language AND country.
         // UE3 picks the game's language files from both - Spain vs Latin American Spanish by country, and the languages
         // the Xbox had no system language for (Czech, Hungarian, Danish, Finnish) from English + that country.
@@ -2290,6 +2537,10 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
         a.push_back(std::string("--cogbox_ach_hide=") + (s.b("HideAchievementPopups") ? "true" : "false"));
     }
     if (s.b("ShowPing") && cap_exe(env, "cogbox_show_ping")) a.push_back("--cogbox_show_ping=true");   // SDK patch 93
+    if (cap_exe(env, "cogbox_match_chat"))   // in-match chat
+        a.push_back(std::string("--cogbox_match_chat=") + (s.b("MatchChat") ? "true" : "false"));
+    if (cap_exe(env, "cogbox_match_chat_background"))
+        a.push_back(std::string("--cogbox_match_chat_background=") + (s.i("MatchChatBackground") == 1 ? "none" : "dark"));
     // PS1 929: FPS counter
     switch (s.i("FpsMode")) {
     case 1: a.push_back("--gow2_fps_bar=top"); break;
@@ -2318,7 +2569,8 @@ std::vector<std::string> build_args(Game g, Version ver, const Settings& s, cons
             a.push_back("--ue3_mouse_fov_comp=" + fmt_double(100.0 / static_cast<double>(s.i("Fov"))));
         if (mouseLook) {
             a.push_back("--pad_look_scale=0.25");
-            a.push_back(std::string("--pad_look_deadzone=") + (g == Game::Gears2 ? "0.3" : isG3 ? "0" : "0.2"));
+            // GitHub #377: with the right slider on, that is the controller's whole camera dead zone
+            a.push_back(std::string("--pad_look_deadzone=") + (dzRight ? "0" : g == Game::Gears2 ? "0.3" : isG3 ? "0" : "0.2"));
         }
         bool defaultKeys = true;
         for (const KeyAction &k : key_actions(g)) {   // 0.2.0: the Gears layout, or the player's own keys (Controls tab)
@@ -2515,10 +2767,14 @@ std::map<std::string, std::vector<std::string>> live_lines(Game g, Version ver, 
         { "Sharpen", { { "gow2_present_sharpen", "0" } } },
         { "FpsMode", { { "gow2_fps_bar", "off" } } },
         { "ShowPing", { { "cogbox_show_ping", "false" } } },
+        { "MatchChat", { { "cogbox_match_chat", "true" } } },
+        { "MatchChatBackground", { { "cogbox_match_chat_background", "dark" } } },
         { "HideNotes", { { "gow2_hide_onscreen_notes", "false" } } },
         { "Mute", { { p + "_mute_unfocused", "false" } } },
+        { "NightMode", { { "audio_night_mode", "false" } } },   // GitHub #425: SDK patch 117 reads it per sound callback
         { "Vibration", { { "vibration", "true" } } },
-        { "DeadZone", { { "left_stick_deadzone_percentage", "0" }, { "right_stick_deadzone_percentage", "0" } } },
+        { "DeadZoneL", { { "left_stick_deadzone_percentage", "0" } } },
+        { "DeadZoneR", { { "right_stick_deadzone_percentage", "0" } } },
         { "WalkMode", { { "mnk_walk_toggle", "false" } } },
         { "AchievementStyle", { { "cogbox_ach_style", "x360" } } },
         { "AchievementColour", { { "cogbox_ach_colour", "dark" } } },
@@ -2536,7 +2792,7 @@ std::map<std::string, std::vector<std::string>> live_lines(Game g, Version ver, 
         { "Fullscreen", { { "fullscreen", "" }, { "window_width", "" }, { "window_height", "" } } },
         { "WindowSize", { { "window_width", "" }, { "window_height", "" } } },
         // - SMAA on / off: the present makes SMAA's textures when first needed; the menu tells the renderer
-        //   (XenosPresentAaChanged). FSR / DLSS / XeSS / T2x change other cvars, so they stay a restart.
+        //   (XenosPresentAaChanged). FSR / DLSS / T2x change other cvars, so they stay a restart.
         { "AAMode", { { "gow2_present_aa", "off" } } },
         // - Button prompt style: the prompt monitor reads its mode again (GlobalPromptDeviceMonitor().ReloadMode()).
         { "PromptStyle", { { "gow_button_prompts", "auto" } } },

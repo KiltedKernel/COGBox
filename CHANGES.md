@@ -1,14 +1,210 @@
 # COGBox changes
 
-## Unreleased
+## 0.6.7
 
+Fixes for the reports against 0.6.6, and two pull requests.
+
+- **Gears 3: crash entering a game online.** The class-derivation cache in the object search was a shared table
+  without a lock; the name-tag worker and the squad-slot code used it at the same time when other players entered
+  a level. It now takes a lock.
+- **Gears 3 and Judgment, 1080p render resolution: menus at the right size** (#408). The menus are Scaleform movies;
+  the game told them to draw at 1:1 pixel size, which only fits at 720 lines. They now keep the "show all" scale
+  mode (as with Ultrawide), so the console layout is scaled to the larger screen. `--gow3_native_ui_show_all=false`
+  / `--gowj_native_ui_show_all=false` bring back 0.6.6.
+- **Black screen with sound in a folder with non-ASCII letters** (#409). The shader compiler's folder (and the
+  recipe pack, draw-log and frame-capture paths) were read in the Windows ANSI code page instead of UTF-8, so
+  dxcompiler.dll was not found and nothing could be drawn. All four games.
+- **Gears of War, 1080p render resolution: menus at the right size** (#408). Gears 1's menus are UI scenes drawn on a
+  canvas whose transform comes from the render target's size, so at 1080 lines they stayed 720p-sized. The scenes now
+  lay out in the console's 1280x720 and the canvas is scaled to the screen while they are drawn.
+  `--gow1_native_ui_layout720=false` brings back 0.6.6. (Subtitles and other HUD text are not UI scenes and keep
+  their 720p pixel size at 1080 lines.)
+- **Gears 3: a rare crash about 20 seconds into start-up** ("read of guest 0x4A9E7324"; seen in 1 of 7 to 1 of 44
+  starts in our tests). The game's file thread adds to its name-to-file-handle table while the game thread looks
+  names up in it, with no lock in the game's own code. The three functions now share a lock.
+  `--gow3_file_handle_map_lock=false` turns it off.
+- **Ambient occlusion: Off is back** (#406). Default / On in 0.6.6 had removed it; Off switches the game's own
+  ambient occlusion off, as before 0.6.6. A saved Off stays Off.
+- **Ambient occlusion On: full size for a 720p / 1080p scene** (PR #411, gmihaic). Half resolution is only used when
+  the 3D scene is drawn at 2x or more; at 1x it looked smeared and crawled.
+- **DLSS / FSR Performance at 4K** (PR #411, gmihaic). With the 4K render resolution and Scene resolution
+  Performance the game draws 1920x1080 itself and the upscaler makes 3840x2160 of it (it only anti-aliased there
+  before). Tested by its author with DLSS on DirectX 12.
+- **Hungarian translation** updated for 0.6.6's texts (PR #410, hevesij).
+- **Known, not fixed: Gears of War at 16:10**, the logo films are flattened (#407: full width, 62 % of the height).
+  A fix aimed at the film player's TV pixel shape was built for this version and did not change the picture (its
+  function is not the one that places these films), so it was taken out again.
+- **Known, not fixed: Judgment, the loading screen after Monroe Commons** (Sofia's testimony) can stay up for ever
+  with a frame-rate limit above 30 (#405). The loading-screen limit of earlier versions does not cure it (the hang
+  starts before the loading screen). Until it is fixed: set the frame-rate limit to 30 before finishing that section
+  and set it back in the next one (from players' reports, not re-tested by us).
+
+## 0.6.6
+
+Everything worked on since 0.6.5. **Speed first:** the renderer's speed work is now on for every player, in all four
+games.
+
+Measured on one PC (RTX 3080 Ti, 2x render scale = 1440p, DirectX 12, no frame cap), the same gameplay route, 0.6.5
+and 0.6.6 back to back, each warmed up first (jobs 2199 / 2204; average frame time, lower is better):
+
+| Game | 0.6.5 | 0.6.6 | Faster |
+|---|---|---|---|
+| Gears of War 2 | 8.54 ms | 5.39 ms | 37 % |
+| Gears of War 3 | 5.87 ms | 4.66 ms | 21 % |
+| Gears of War: Judgment | 10.09 ms | 7.85 ms | 22 % |
+| Gears of War | 6.99 ms | 6.27 ms | 10 % |
+
+Vulkan, same test: Gears 2 12.84 -> 11.34 ms (12 % faster), Gears 3 9.89 -> 6.39 ms (35 % faster). Your PC's numbers will differ; the gain is
+largest where the graphics card was the limit.
+
+- **Faster drawing, all four games.** Pixel shaders without the alpha test when a draw does not use it (the graphics
+  card keeps its early depth rejection), texture fetches that skip post-processing they do not need, no 16-bit filter
+  rounding, 21-bit maths rounding in vertex shaders only, small vertex ranges copied only when they change, a leaner
+  front-buffer copy, and on DirectX 12 the gamma pass feeding SMAA directly. These were test switches until now; they
+  are the defaults in 0.6.6, each with a switch to turn it back off.
+- **Your shader lists carry over.** The pipelines recorded by an older version, and the lists shipped with COGBox, are
+  read as the new faster shaders, so they are prepared before play as before (without this every one of them was
+  built for nothing and made again mid-game). The first start of each game after updating still reads the game's
+  packages once.
+- **Upscalers at 32:9 and wider** (#399): FSR, DLSS and SMAA T2x never started when the picture was lower than 512
+  rows (32:9 draws 1280x360). The limit now follows the picture.
+- **Ambient occlusion: Default or On.** One switch replaces the list. On is XeGTAO (high) at half resolution - about
+  half the cost of full resolution, with a picture that is hard to tell apart. A saved Off becomes Default; a saved
+  Ultra or CACAO becomes On.
+- **DLSS:** model K for Performance and Ultra Performance on RTX 20 / 30 cards (lighter than NVIDIA's newest models
+  there).
+- **Gears 1:** "Skip the intro logos" also ends the Epic logo (#400).
+- **Gears 2:** pre-rendered films follow the Voice language (#375); edited Coalesced files load without the
+  dirty-disc error (#392, #393 - always on, no launcher box).
+- **Gears 3:** DLSS / FSR upscale the finished scene, and object motion is matched by object rows (PR #379, gmihaic).
+- **Judgment:** ultrawide scene targets follow the picture's height (#396).
+- **Gears 3, ultrawide menus (#396):** full-screen menus are drawn in a 16:9 box in the centre, so pieces of other
+  menus no longer show in the side strips.
+- **AMD graphics, pink / purple textures (#365):** new textures are set up the way AMD's guide asks before the game
+  first writes them.
+- **HDR:** more SDR fallbacks (PR #380, legoliamneeson).
+- **Frame generation** is not offered on graphics with under 3.5 GB of their own video memory (#397).
+- **Screenshots and frame shots** are written by their full Unicode path (a Pictures folder with letters outside the
+  Windows code page).
+- **Launcher:** System Link is no longer labelled experimental; long labels wrap beside their control (PR #381,
+  Flippage); Hungarian translation update (#390, hevesij); the in-game menu no longer lists choices that were dropped.
+- **Name tags** (#353 follow-up, PR #404, Flippage): COGBox tags show as plain `Name#1234` in every game. The grey
+  markup showed up as text where a game draws a name as plain text (kill feed, names over heads, TacCom).
+- **Removed:**
+  - Intel XeSS and XeSS frame generation. A saved XeSS choice becomes SMAA; a saved XeSS frame generation becomes AMD
+    FSR frame generation. Their DLLs are no longer shipped, and the launcher removes them from an older install.
+  - FidelityFX CACAO (the second ambient-occlusion method).
+  - "Match my monitor" as a render resolution (a saved one becomes the whole-number scale it picked).
+  - The "Game version" choice and the disc builds of Gears 2 / Gears 3: title updates have been required since 0.4.0,
+    and Title Update 6 is now the only version built.
+- **True 1080p.** The 1080p render resolution now makes the game itself draw 1920x1080 - real detail, where it used
+  to be 720p upscaled and sharpened. With Ultrawide on, Gears 2 and Gears 3 scale the wide picture the same way
+  (1280x550 becomes 1920x826); Judgment and Gears of War still upscale there. The games' own menus and pause screens fill the larger screen too
+  (Gears 2's menus lay out in the console's 1280x720 and are scaled up, as on the console).
+- **Notices:** the XeGTAO, SMAA, stb_dxt and native mouse look licence texts are in `THIRD_PARTY_NOTICES.md`; Intel's
+  terms are gone with XeSS.
+
+## 0.6.5
+
+**The big one: shaders.** COGBox 0.6.5 rebuilds how the games' shaders are translated, kept and built, and you feel it
+from the moment you press Play:
+
+| Gears 3, RTX 3080 Ti PC | 0.6.4 | 0.6.5 |
+|---|---|---|
+| Shader warm-up, every start after the first (DirectX 12) | 8.5 s | **0.2 s** (97% less) |
+| CPU work for that warm-up | 85 s of thread time | **1.4 s** (98% less) |
+| Start to the 300th frame | 15.4 s | **5.2 s** (66% sooner) |
+| Shader warm-up, Vulkan, a later start | 9.4 s | **1.9 s** |
+| Shader translation on a first-ever start | 15.8 s | **7.0 s** (56% faster) |
+| Stutters over 50 ms on a first-ever start | | **67% fewer** |
+| Worst frame times (p99), Vulkan, new graphics driver | 47.8 ms | **26.7 ms** (44% lower) |
+
+Converted shaders are now kept between starts, the translator does about 88% less CPU work, saving pipelines no longer
+pauses the game, and after a driver update the area you are playing is built first. Details below.
+
+- **Much faster start-up** - compared with 0.6.4's shader translator (Gears 3, RTX 3080 Ti PC, same shaders):
+  - **DirectX 12 (the default), every start after the first: shader warm-up 97% less time** (8.5 s -> 0.2 s) and **98%
+    less CPU work** (85 s of thread time -> 1.4 s); from start to the 300th frame **66% sooner** (15.4 s -> 5.2 s),
+    and the worst frame times (p99) **23% lower** in the first minute. Converted shaders are now kept between starts
+    (`dxbc-store.bin` in the shader cache; a new COGBox build starts it again), and the saved pipelines load in one read.
+    The first start of a new build already warms up **85% faster** (8.5 s -> 1.3 s) while it fills that store.
+  - **Vulkan: converted shaders are kept between starts too** - shader warm-up 1.9 s on a later start, against 9.4 s for
+    0.6.4's translator (measured on a first start; 0.6.4 converted every shader again at every start).
+  - **The shader translator itself does about 88% less CPU work** when it runs (DirectX 12, a separate measurement: 118 s across its threads ->
+    14 s), with **95% fewer** memory page faults and **98% less** time spent in Windows itself - and exactly the same
+    shaders out (checked on all 9,296 Gears 3 shaders).
+  - **A first-ever start** (empty shader cache, DirectX 12): shaders translated **56% faster** while you play
+    (15.8 s -> 7.0 s), **12% more frames** in the first minute, **67% fewer** stutters over 50 ms, and the worst frame
+    times (p99) **16% lower**. Most of a first start is now the graphics driver building its own shaders.
+  - Why: our shader translator re-copied each shader it was writing for every instruction, and on Windows each copy was
+    a new memory request - with 14 threads at once the PC spent most of the warm-up waiting on memory. Vulkan also hands
+    each converted shader to the driver as soon as it is ready, keeps converted shaders between starts by default, and
+    the async shader mode no longer competes with the start-up work.
+  - **No more short pause while pipelines are saved** (DirectX 12): every ~15 s of new pipelines, saving them held up
+    the pipelines being built for about a third of a second (Gears 3's ~480 MB file); a pipeline built during a save
+    is now stored right after it instead of waiting.
+  - **Smoother first start after a new graphics driver or card** (DirectX 12; Gears 3 with every cache emptied, NVIDIA's
+    included): the shaders of the area you are playing are now built first instead of after every shader saved from earlier
+    starts - **33% fewer** draws left out while waiting (17,286 -> 11,657) and worst frame times (p99) a little lower. The
+    background building also runs at a lower priority with half its threads during play. And when the shaders weren't
+    prepared for this driver, card and renderer, **Play now offers "Prepare all shaders" first** (then the game starts by
+    itself; Play now / Don't ask again).
+  - **Vulkan: no more long freezes on a first start** (same test): a draw whose pipeline wasn't built yet could build it
+    right there and hold the frame up to three quarters of a second; it now waits a few milliseconds, as on DirectX 12,
+    and is left out of that frame if the pipeline isn't ready. Worst frame times (p99) **44% lower** (47.8 -> 26.7 ms).
+  - **"Prepare all shaders" runs offline** (#370 by Flippage): the run that prepares the shaders started like a normal
+    game and signed in to the COGBox server as you - a second copy of you online for minutes. It now starts with no
+    online server and without your online identity.
+- **Gears 1: 16:10** (Steam Deck, 16:10 laptops): the Aspect ratio setting now covers Gears 1, and the picture fills the
+  screen in gameplay instead of keeping 16:9 bars. All four games: Aspect ratio 16:10, and Auto picks it on a 16:10 screen.
+- **Stick dead zones** (Controls tab): separate Left stick and Right stick dead zone sliders (0-50 %), as in popular
+  emulators - a round dead zone in every direction, with the stick still reaching full at its edge. The old dead zone
+  only worked to the right and up, and was about twice as big as it said.
+- **Cheats reworked** (GitHub #342, #359):
+  - **Chosen in the launcher** (Gameplay tab), on for the whole game: God mode, Game speed (slow motion), All weapons
+    and ammo, Hide the HUD. Campaign and wave modes only, never in Versus.
+  - **Cheat keys** (Cheat keys option): F9 free camera (Gears 1: fly through walls), F10 freeze the world, F11 hide / show
+    the HUD. God mode, slow motion and all weapons are no longer keys.
+  - **A small popup** shows what a cheat key did (God mode ON / OFF, Freeze the world ON, ...) or why it can't run.
+  - **Gears 2:** cheats now also work when the campaign is started from the menus ("not recognised" in 0.6.3).
+  - **Gears 3 with Title Update 6:** God mode, Game speed and Hide the HUD work; All weapons and ammo and the cheat keys
+    don't yet.
+- **Gears 3 Horde bots get their own characters** (Discord): bots added with the Horde-bots button were all Marcus,
+  whatever their name. The game now loads each bot's character, and it comes back as that character from its next
+  respawn (its first life is still Marcus).
+- **Open matches: DLC light** - a dot next to each match: green when you have the host's map (base game or your
+  installed DLC), red when you don't, grey while the host hasn't picked one. Gears 3 and Judgment; needs the updated
+  online server.
+- **Linux / Steam Deck players can be joined online again** (Discord): Linux doesn't let a game use port 1000, so on
+  Proton the game was moved to another port - and other players' games, still sending to 1000, found the lobby but
+  couldn't reach it, so the join failed. The game now keeps its usual port as far as the game and other players can
+  tell, while using the port Linux gave it underneath. Tested on Windows with the port refused on purpose; joins through
+  the online server were not tested on our PC.
+- **A versus search no longer sends you into someone's campaign** (Discord): searching for a versus match could join
+  another player's campaign lobby (seen with RAAM's Shadow in Gears 3). Searches for a versus playlist now skip lobbies
+  that don't name a playlist (tested in Gears 3; Gears 2 and Judgment versus lobbies not checked yet).
+- **Judgment: no more one-frame light flashes with XeGTAO, steady blood decals with DLSS, and no freeze back to the main
+  menu** (by Flippage):
+  - With XeGTAO on, large areas (and the player model) lit up for a single frame as the camera moved. On some frames
+    Judgment makes an extra copy of the scene before its fog pass (what is on screen decides), and that copy was taken
+    as the frame's scene, so the AO that goes in at the fog pass was left out of that frame - and DLSS / FSR / XeSS got
+    the scene without its last passes. The scene copy is now one made after the fog pass
+    (`--gow2_upscale_scene_after_fog`, on for Judgment); frames without the fog pass (a pause or menu over the world)
+    go back to the old choice after two frames.
+  - Blood decals and lighting over floors flickered off with DLSS on: Judgment now raises the decal depth offset as
+    Gears 1 does (`--gow2_renderer_decal_min_bias=0.01`) and nudges such overlay draws toward passing
+    (`--gow2_renderer_overlay_depth_nudge=2`, new for Judgment).
+  - Back to the main menu, the game froze for 2 seconds: the GPU waited for a marker it had just written, and an
+    occlusion result landing late had replaced it. In Judgment, a wait for that occlusion marker now passes once the
+    GPU's own write of it has landed, as it would on the console; the 2-second limit stays as the last resort. The other
+    games are unchanged.
 - **The FABRICATOR is a local mod manager** (KiltedKernel): the launcher's FABRICATOR screen manages the mods of all four
   games on your PC, offline, with nothing sent anywhere (it is also reached from **More in FABRICATOR** on a game's Mods
   tab).
   - **LIBRARY:** add a mod from a `.zip` or a folder (or drop one on the window); it is checked, added, turned on and
     put last in the load order. Adding a mod again with the same mod.ini Name offers an update. Turn mods on or off,
     move them in the order, open the mods folder, and uninstall (the folder is moved to `mods\.fabricator-backup`, not
-    deleted). A mod folder you put there by hand is never moved or deleted. While the game runs, an added mod waits
+    deleted). A mod folder you put there by hand (one without COGBox's `fabricator.json`) is never moved or deleted. While the game runs, an added mod waits
     and is installed once the game is closed; a row's Update and Uninstall, on / off and the order refuse with "Close
     the game first.". Program files in a mod (programs, libraries, scripts, installers, shortcuts, archives inside the
     zip) are left out, and the install names them.
@@ -37,13 +233,33 @@
   **Recent players** lists the COGBox players you were in an online match with over the last 14 days, newest first, with
   the game and when, and an ADD FRIEND (or ACCEPT) button. The game reports the players it shows tags for, each at most
   once every 10 minutes; the server keeps one row per pair (new table recent_players, POST / GET
-  /api/v1/players/recent). The Gears 3 team-picking note under Open matches is gone.
+  /api/v1/players/recent; needs the updated online server). The Gears 3 team-picking note under Open matches is gone.
 - **COGBox tags on every player's name** (all four games; GitHub #353): in online lobbies, party lists and the
   scoreboard each player's name shows their COGBox tag after it in grey, for example Flapper#5531, so you can add
   someone you just played with as a friend by their tag. The game asks the COGBox server once for each new player (up to
   32 at a time) and keeps the answer; it never asks again for a player it already knows. Off with
   --cogbox_name_tags=false. The kill feed shows the tag too, in the name's own colour (it draws plain text: COGBox takes
-  the colour markup out where the HUD draws or measures its text).
+  the colour markup out where the HUD draws or measures its text; in the title-update builds of Gears 2 and Gears 3).
+- **HDR for Judgment and Gears 1** (PR #351 by legoliamneeson - thank you), more SDR-fallback fixes, and improved
+  sampling of Gears 3's colour grading in HDR (Improved HDR LUT sampling, on by default; turn it off for the previous
+  look).
+- **Each game has its own icon in the taskbar and Alt+Tab** (GitHub #355): the game's own title picture, read from your
+  game files as it starts (nothing extra is shipped).
+- **Scene resolution note** (GitHub #345): when an upscaler can't shrink the scene at your render resolution (e.g.
+  DLSS Performance at 4K), a note under the setting now says it will only anti-alias (no extra frames) and what to pick
+  instead.
+
+### Fixes
+- **Judgment: English voices with another language's text** (GitHub #367): the Voice language setting did nothing in
+  Judgment - every localised package kept its own language, because COGBox could not read the newer package format
+  Judgment uses (version 846; Gears 2 and 3 are older). It now reads it, so a package whose English twin has all its
+  objects gives the English voices, as in Gears 2 and 3. Checked on Judgment's English packages; not yet played with
+  another language's text.
+- Kernel fixes from the Xenia Canary / Edge comparison (timers, semaphores, a read/write lock, XMA): none of our four games
+  was seen to use the changed paths, so no change is expected in play.
+
+### Translations
+- **Hungarian** fixes and newly translated lines (PR #356 by hevesij - thank you).
 
 ## 0.6.4
 

@@ -18,6 +18,8 @@
 #include <xenos/dev_tools.h>
 #include <xenos/frame_limiter.h>
 #include <xenos/display_size.h>
+#include <ue3/native_viewport.h>  // 0.6.6 true 1080p menus
+#include <ue3/objects.h>
 #include "mouse_look.h"   // 0.5.0: CogMouseLookNoteFov (aim / zoom sensitivity)
 
 #include <algorithm>
@@ -841,7 +843,10 @@ bool GowjGpuWaitStep() {  // jump_address_on_true: skip the empty delay loop to 
 //   0x82640588 `lfs f0,1628(r27)` (the field-of-view factor) -> f0 = 0.010975 (the patch's code cave)
 //   0x82992664 `li r11,720` (the scene buffer height, stored to the screen-height global) -> 550
 //   0x82369E30 `bne cr6,0x82369e3c` -> always taken (the vignette: its texture can't be rescaled)
-//   0x827F1DD4 `lwz r30,-10976(r9)` (SceneRenderTargets reads that global) -> 720, so the targets keep their size
+//   0x827F1DD4 `lwz r30,-10976(r9)` (SceneRenderTargets reads that global) -> left at the picture's height since
+//     0.6.6 (GitHub #396; the Canary patch and 0.6.5 forced 720 here, see GowjUltrawideTargetHeight);
+//   0x827F33AC `addi r3,r1,264` (scene shared memory block 2 created next) -> its size kept at the 16:9 size (0.6.6,
+//     GowjUltrawideSharedMemory; not in the Canary patch);
 //   0x82CBA684 `stw r4,136(r3)` (Scaleform's scale mode) -> replaced by `li r4,1` (the store is skipped)
 //   the .rdata floats 0x82082C30 / 0x82083350 (post-process scale, 16:9 = 1.7778) -> 2.3273, written at load.
 // The front buffer becomes 1280x550 (x the resolution scale) and is shown at its own shape (--gow2_present_frame_aspect).
@@ -889,12 +894,26 @@ inline double FovScale(uint32_t h) {
   return k(Widen(h)) / k(Widen(550));
 }
 }  // namespace uwshape
+// GitHub #396 (as Gears 3's #330, fixed there in 0.6.3): with the scene render targets kept at 1280x720 under a 1280xH
+// picture, the Stats & Awards pages (Achievements, Medals...) draw stacked cyan bands over the whole screen.
+REXCVAR_DEFINE_BOOL(gowj_aspect_targets_720, false, "Judgment",
+                    "With --gowj_ultrawide: keep the scene render targets at the 16:9 size 1280x720 as the Canary patch "
+                    "does (before 0.6.6). Off = sized for the picture, as the game sizes them at 16:9 (GitHub #396: on, "
+                    "the Stats & Awards pages draw stacked cyan bands)");
 REXCVAR_DEFINE_STRING(gowj_aspect, "", "Judgment",
                       "With --gowj_ultrawide: the shape. Empty = 21:9 (1280x550, the Canary patch); auto = the monitor's; "
                       "or e.g. '21:9', '32:9', '3440:1440'");
 namespace {
 uint32_t GowjWideHeight() {
-  static const uint32_t h = uwshape::Height(REXCVAR_GET(gowj_aspect), "gowj_ultrawide");
+  // GitHub #396: the game rounds its scene render targets up to 8 rows (sub_827F3088: (h + 7) & ~7), so with the
+  // targets following the picture every height is a multiple of 8 and both match exactly: Canary's 550 -> 552.
+  static const uint32_t h = [] {
+    const uint32_t raw = uwshape::Height(REXCVAR_GET(gowj_aspect), "gowj_ultrawide");
+    if (REXCVAR_GET(gowj_aspect_targets_720)) return raw;
+    const uint32_t h8 = std::clamp((raw + 4u) / 8u * 8u, 240u, 720u);
+    if (h8 != raw && REXCVAR_GET(gowj_ultrawide)) REXLOG_INFO("gowj_ultrawide: scene height {} -> {} (a multiple of 8, GitHub #396)", raw, h8);
+    return h8;
+  }();
   return h;
 }
 template <typename T> void LogOnce(bool& done, const char* what, T before, T after) {
@@ -918,21 +937,153 @@ void GowjUltrawideFov(PPCRegister& f0, PPCRegister& f31) {
   LogOnce(l, "field-of-view factor", f0.f64, f);
   f0.f64 = f;
 }
+// ---- Experiment (Shagg, 20 Nov): true 1080p, as Gears 2's --gow2_native_lines ---------------------------------------
+// sub_829925D0 (the function of the scene-height site): the height `li r11,720` at 0x82992664; the width = aspect x 720
+// clamped to 904..1280 in r5, both paths meeting at 0x82992694 (`lis r11,-31925`), stored at 0x829926A8; `li r6,720` at
+// 0x829926A4 and r5 go to a call (0x822FE3E8) as height and width; the stored width is read back at 0x829926B8
+// (`lwz r11,0(r30)`) and compared with 1280 - any other width takes the narrow-screen path (two values set to 800), so
+// that read gets 1280 when the width is ours. --gowj_native_lines=1080 gives 1920x1080. Needs
+// --gow2_renderer_edram_extended=true. Not with --gowj_ultrawide. NOT RUN YET: written from the generated code.
+REXCVAR_DEFINE_INT32(gowj_native_lines, 0, "Judgment",
+                     "Experiment (true 1080p): the game's own screen height in lines, 0 = 720 as on the console. 1080 "
+                     "makes the game draw 1920x1080 itself (width = lines x 16 / 9, a multiple of 8). Needs "
+                     "--gow2_renderer_edram_extended=true. Not with --gowj_ultrawide")
+    .range(0, 1440);
+namespace {
+uint32_t GowjNativeLines() {
+  static const uint32_t lines = [] {
+    const int v = REXCVAR_GET(gowj_native_lines);
+    if (v <= 720 || REXCVAR_GET(gowj_ultrawide)) return 0u;
+    return uint32_t(v + 7) / 8u * 8u;
+  }();
+  return lines;
+}
+// The game's own width times lines / 720 (a multiple of 8): the 16:10 and 4:3 video modes keep their shape.
+uint32_t GowjNativeWidth(uint32_t game_width) { return (game_width * GowjNativeLines() / 720u + 7u) / 8u * 8u; }
+}  // namespace
+void GowjNativeSceneWidth(PPCRegister& r5) {  // before `lis r11,-31925` at 0x82992694: the clamped width
+  if (!GowjNativeLines()) return;
+  static bool l = false;
+  const uint32_t width = GowjNativeWidth(r5.u32);
+  LogOnce(l, "native lines: screen width", uint32_t(r5.u32), width);
+  r5.u64 = width;
+}
+void GowjNativeCallHeight(PPCRegister& r6) {  // after `li r6,720` at 0x829926A4: the height passed with the width
+  if (GowjNativeLines()) r6.u64 = GowjNativeLines();
+}
+void GowjNativeWidthCheck(PPCRegister& r11) {  // after `lwz r11,0(r30)` at 0x829926B8: compared with 1280
+  if (GowjNativeLines() && r11.u32 == GowjNativeWidth(1280)) r11.u64 = 1280;  // only the full-width (16:9) case
+}
+// 0.6.6 (job 2189: at true 1080p the menus sat in the top-left 1280x720 of the 1920x1080 picture): the game's FViewport
+// still reports the console's 1280x720 to every UI system (ue3/native_viewport.h: why, the checks, and the Gears 3 TU6
+// code it was read from - Judgment's engine is Gears 3's: its Scaleform movies take their GViewport from the GFx
+// engine's Viewport->GetSizeX / GetSizeY, as UGameViewportClient::GetViewportSize does). The object: GEngine (cheats.cpp's
+// 0x83544E04) -> GameViewport -> Viewport, the two offsets read from the script classes (GameEngine.GameViewport,
+// GameViewportClient.Viewport); if a name is not found, Gears 3's layout moved by Judgment's GamePlayers (+4: 1188 here,
+// 1184 in Gears 3) - GameViewport +1200 [not read in Judgment's code], Viewport +68 - and Install's checks decide.
+// Once per engine tick (cheats.cpp's GetMaxTickRate override) until on, every 30 ticks; then the object is followed.
+bool GowjObjectsReady();  // adaptive_triggers.cpp
+void GowjNativeUiViewportTick() {
+  namespace nv = ue3::native_viewport;
+  namespace obj = ue3::obj;
+  if (!GowjNativeLines()) return;
+  static uint32_t ticks = 0;
+  static int fails = 0, gv_off = -1, vp_off = -1;
+  if (++ticks % 30 || fails > 20) return;
+  if (gv_off < 0 || vp_off < 0) {
+    if (ticks % 300 || !GowjObjectsReady()) return;   // FindClass misses scan every object: every 5 s at most
+    const uint32_t ge = obj::FindClass("GameEngine"), gvc = obj::FindClass("GameViewportClient");
+    if (!ge || !gvc) { ++fails; return; }
+    const int g = obj::PropertyOffset(ge, "GameViewport"), v = obj::PropertyOffset(gvc, "Viewport");
+    gv_off = g >= 0 ? g : 1200;
+    vp_off = v >= 0 ? v : 68;
+    REXLOG_INFO("gowj_native_lines: GameEngine.GameViewport +{}{}, GameViewportClient.Viewport +{}{}", gv_off,
+                g >= 0 ? "" : " (not found: Gears 3's layout)", vp_off, v >= 0 ? "" : " (not found: Gears 3's)");
+  }
+  const uint32_t engine = obj::Read32(0x83544E04u);
+  const uint32_t client = engine ? obj::Read32(engine + uint32_t(gv_off)) : 0;
+  const uint32_t viewport = client ? obj::Read32(client + uint32_t(vp_off)) : 0;
+  if (!viewport) return;
+  if (nv::g_installed.load(std::memory_order_relaxed)) {
+    nv::NoteViewport(viewport);
+    return;
+  }
+  const nv::Result r = nv::Install(viewport, GowjNativeLines());
+  if (r.ok) {
+    REXLOG_INFO("gowj_native_lines: UI scene viewport {}x{} -> {}x{} (the game's FViewport 0x{:08X}: GetSizeX / GetSizeY "
+                "0x{:08X} / 0x{:08X}, vtable slots {} / {}) - menus and Scaleform movies lay out in the larger screen",
+                r.w0, r.h0, r.w1, r.h1, viewport, r.fn_x, r.fn_y, r.slot, r.slot + 1);
+  } else if (++fails > 20) {
+    REXLOG_WARN("gowj_native_lines: the menus stay laid out in 1280x720 - {}", r.why);
+  }
+}
 void GowjUltrawideSceneHeight(PPCRegister& r11) {
+  if (GowjNativeLines()) {
+    static bool n = false;
+    LogOnce(n, "native lines: screen height", uint32_t(r11.u32), GowjNativeLines());
+    r11.u64 = GowjNativeLines();
+    return;
+  }
   if (!REXCVAR_GET(gowj_ultrawide)) return;
   static bool l = false;
   LogOnce(l, "scene buffer height", uint32_t(r11.u32), GowjWideHeight());
   r11.u64 = GowjWideHeight();
 }
 bool GowjUltrawideNoVignette() { return REXCVAR_GET(gowj_ultrawide); }  // jump_address_on_true 0x82369E3C
+// After `lwz r30,-10976(r9)` at 0x827F1DD4 in sub_827F1DB0 (UE3 FSceneRenderTargets::Allocate on Xbox, as Gears 3's
+// sub_827D7AA8): r29 / r30 = the screen width / height globals, grown into BufferSizeX/Y (+276 / +280, rounded up to 8
+// by sub_827F3088) when larger, then the targets are made again. At 16:9 the targets are exactly the screen's size and
+// the Stats & Awards pages (a Scaleform movie) rely on it: they copy the screen into a scene target and draw it back
+// as if the texture were the screen's size. The Canary patch kept r30 = 720 here, so under a 1280x536 picture each
+// copy came back squeezed: the stacked cyan bands of GitHub #396 (3440x1440; Gears 3's #330 was the same). The game's
+// own value (the picture's height) keeps targets and picture the same size, as at 16:9.
 void GowjUltrawideTargetHeight(PPCRegister& r30) {
   if (!REXCVAR_GET(gowj_ultrawide)) return;
-  static bool l = false;
-  LogOnce(l, "render target height", uint32_t(r30.u32), 720u);
-  r30.u64 = 720;
+  if (REXCVAR_GET(gowj_aspect_targets_720)) {
+    static bool l = false;
+    LogOnce(l, "render target height (--gowj_aspect_targets_720)", uint32_t(r30.u32), 720u);
+    r30.u64 = 720;
+    return;
+  }
+  static std::atomic<uint32_t> last{0};
+  if (last.exchange(r30.u32) != r30.u32) {
+    static std::atomic<int> n{0};
+    if (n.fetch_add(1) < 8)
+      REXLOG_INFO("gowj_ultrawide: scene render targets sized from screen height {} (picture 1280x{}; 720 before 0.6.6, "
+                  "GitHub #396){}", r30.u32, GowjWideHeight(), r30.u32 == GowjWideHeight() ? "" : " - NOT the picture height");
+  }
 }
+// After `addi r3,r1,264` at 0x827F33AC, just before the `bl` to sub_82998D30 (RHICreateSharedMemory) for the scene's
+// shared memory block 2 (GSceneRenderTargets+388) in sub_827F3100 (InitDynamicRHI): r5 = its size, max(BufferSize
+// format 2, BufferSize format 19). The game also creates a format-12 depth texture of a fixed size in that block (the
+// call before 0x827F33AC's block is used again near the function's end: `lwz r7,0(r14)`, `li r6,12`), which no longer
+// fits when the targets follow a much smaller picture - Gears 3 trapped there (its #330, job 1907). Keep the 16:9
+// capacity (1280 x 736 x 4, the size 0.6.5 allocated) so the targets can follow the picture's height.
+void GowjUltrawideSharedMemory(PPCRegister& r5) {
+  if (!REXCVAR_GET(gowj_ultrawide) || REXCVAR_GET(gowj_aspect_targets_720)) return;
+  constexpr uint32_t kStock720 = 1280u * 736u * 4u;  // 0x398000
+  static bool l = false;
+  if (r5.u32 >= kStock720) {
+    if (!l) { l = true; REXLOG_INFO("gowj_ultrawide: scene shared memory block 2 is 0x{:X} (not below the 16:9 size 0x{:X})", r5.u32, kStock720); }
+    return;
+  }
+  if (!l) { l = true; REXLOG_INFO("gowj_ultrawide: scene shared memory block 2 0x{:X} -> 0x{:X} (GitHub #396)", r5.u32, kStock720); }
+  r5.u64 = kStock720;
+}
+// 0.6.7: same as Gears 3 (gow3_native_ui_show_all): at --gowj_native_lines the game's own Scaleform scale mode draws
+// the 1280x720 menus at 720p pixel size (job 2200 A-1080p-Judgment: pause text 2/3 size). Skipping the store keeps
+// show-all, as under Ultrawide: the console layout scaled by lines / 720.
+REXCVAR_DEFINE_BOOL(gowj_native_ui_show_all, true, "Judgment",
+                    "With --gowj_native_lines: Scaleform menus keep the show-all scale mode, so the console's 1280x720 "
+                    "layout is scaled to the larger screen (false = the 0.6.6 behaviour: drawn at 720p size)");
 bool GowjUltrawideUiScale(PPCRegister& r4) {  // jump_address_on_true 0x82CBA688: the store is skipped, r4 = 1
-  if (!REXCVAR_GET(gowj_ultrawide)) return false;
+  if (!REXCVAR_GET(gowj_ultrawide)) {
+    if (!GowjNativeLines() || !REXCVAR_GET(gowj_native_ui_show_all)) return false;
+    static bool n = false;
+    LogOnce(n, "native lines: Scaleform scale mode (menus keep show-all)", uint32_t(r4.u32), 1u);
+    r4.u64 = 1;
+    return true;
+  }
   static bool l = false;
   LogOnce(l, "Scaleform scale mode", uint32_t(r4.u32), 1u);
   r4.u64 = 1;

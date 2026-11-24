@@ -18,7 +18,9 @@ constexpr int kGameCount = 4;
 // on with --gow3_first_person=true / --gow2_ / --gowj_ in extra-args.txt. true = the Gameplay tab offers it again.
 constexpr bool kOfferFirstPerson = false;
 enum class Version { TitleUpdate = 0, Disc = 1 };   // PS1 125 $verNames (index 0 = the title update)
-enum class Tab { Display, Graphics, Controls, Gameplay, Achievements };   // = the page's tab index (ABOUT is after)
+// = the page's tab index (SOCIAL, MODS, ABOUT are after). GitHub #425: Audio before Achievements - tabs are not saved by
+// index (options by id, the in-game menu by tab_name()), and page.cpp / front.cpp / main.cpp name these indexes.
+enum class Tab { Display, Graphics, Controls, Gameplay, Audio, Achievements };
 // Text (0.4.8, GitHub #229): a short line of text (Settings::t), always Scope::Shared, kept in [General] of the settings
 // file; every value goes through sanitize_text() on the way in and out, so only its allowed characters ever reach the
 // file or the command line.
@@ -73,6 +75,10 @@ struct Environment {
     // reads them (no software adapters, no Microsoft Basic Render Driver). The Graphics card option is sent only when its
     // saved name is one of these. Empty = not worked out (the option sends nothing: Automatic).
     std::vector<std::string> graphics_cards;
+    // GitHub #425: the sound output devices the game can choose from - SDL's playback devices' names, as the runtime's SDL
+    // lists them (SDK patch 117). The Output device option is sent only when its saved name is one of these. Empty = not
+    // worked out (the option sends nothing: System default).
+    std::vector<std::string> audio_devices;
     int screen_count = 1;           // PS1 146 (Monitor is greyed with fewer than 2)
     // PS1 947-948: the screen the game uses - Monitor 1..N if within screen_count, else the main screen - its refresh
     // rate now (0 = unknown) and its device name (only for the note).
@@ -159,11 +165,9 @@ Availability choice_available(const Option& o, Game g, int index);
 // Frame generation choices (FrameGen): 2-5 (NVIDIA DLSS) are not listed at all without the exe's support and NVIDIA's
 // Streamline DLLs next to it; greyed without an RTX 40 (2x) / RTX 50 (3x, 4x, dynamic) card. 1 (AMD) greyed without its DLL.
 bool dlss_fg_present(const Environment& env);
-// 0.4.9 (xefg049): 7 = Intel XeSS frame generation (experimental): listed only with the exe's support and Intel's
-// libxess_fg.dll + libxell.dll next to it; offered on Intel Arc and on other makes' DirectX 12 cards (Intel allows it).
-constexpr int k_fgXefg = 7;
+// 7 = a frame-generation choice dropped in 0.6.6: never listed; a saved 7 becomes AMD's (Store::view).
+constexpr int k_fgDropped = 7;
 inline bool framegen_is_dlss(int index) { return index >= 2 && index <= 6; }
-bool xefg_present(const Environment& env);
 bool framegen_choice_hidden(int index, const Environment& env);
 // Notes/83: on Vulkan only 1 (AMD, experimental) - with AMD's Vulkan DLLs, the exe's support and SDK patch 69.
 Availability framegen_choice_available(int index, const Environment& env, bool vulkan = false);
@@ -180,9 +184,31 @@ bool fsr_vulkan_on(const Settings& s, const Environment& env);   // ...and "FSR 
 int expected_render_scale(Game g, const Settings& s, const Environment& env);
 // #345 / GitHub #98: Scene resolution mode m (1 Quality, 2 Performance, 3 Ultra performance) has a whole-number scene size
 // at render scale `out` - otherwise the upscaler only anti-aliases (DLAA / native AA)
-inline bool scene_mode_fits(int m, int out) { return (m == 2 && (out == 2 || out == 4)) || ((m == 1 || m == 3) && out == 3); }
+// perf1080 (performance_1080_base): at 3x (4K) Performance fits too - the scene is then the game's own 1920x1080
+// (true 1080p), drawn at 1x under a 2x output, a whole-number pair.
+inline bool scene_mode_fits(int m, int out, bool perf1080 = false) {
+    return (m == 2 && (out == 2 || out == 4 || (out == 3 && perf1080))) || ((m == 1 || m == 3) && out == 3);
+}
+// Performance at 4K from the true-1080p base: this game's exe can draw 1920x1080 itself (the same conditions as the
+// 1080p render resolution - its menus, and the wide picture with Ultrawide on). The launcher then sends 2x of 1080
+// lines instead of 3x of 720 for "4K + Performance": the same 3840x2160 output, with a 1920x1080 scene for the upscaler.
+bool performance_1080_base(Game g, const Settings& s, const Environment& env);
+// 0.6.6 (Shagg 20 Nov; job 2137b: DLSS "Quality" at 1440p cost 1.1 ms of GPU time and lowered nothing): a Scene
+// resolution that the render resolution can't divide is greyed in the list, with what would make it work.
+inline Availability scene_mode_choice_available(int m, int out, bool perf1080 = false) {
+    Availability a;
+    if (m < 1 || m > 3 || scene_mode_fits(m, out, perf1080)) return a;
+    a.ok = false;
+    const std::string at = out == 1 ? "720p / 1080p (1x)" : out == 2 ? "1440p (2x)" : out == 3 ? "4K (3x)" : "5K (4x)";
+    a.why = m == 2 ? "Performance draws the scene at half size, which needs render resolution 2x (1440p) or 4x. At " + at +
+                         " it would only anti-alias and cost frames."
+                   : std::string(m == 1 ? "Quality draws the scene at 2/3 size" : "Ultra performance draws the scene at 1/3 size") +
+                         ", which needs render resolution 3x (4K). At " + at + " it would only anti-alias and cost frames." +
+                         (out == 2 || out == 4 ? " Performance works here." : "");
+    return a;
+}
 // proton049: under Proton / Wine, a single choice that can't work there, with its one-line reason (always ok on
-// Windows): exclusive fullscreen, NVIDIA DLSS without an NVIDIA RTX card, DLSS / XeSS frame generation.
+// Windows): exclusive fullscreen, NVIDIA DLSS without an NVIDIA RTX card, DLSS frame generation.
 Availability wine_choice_available(const Option& o, int index, const Environment& env);
 // proton049: a line about the row on Linux / Steam Deck (DLSS and NVAPI, HDR, Reflex, the Deck's 40 / 60 fps), shown
 // under its description under Proton / Wine; "" on Windows.
@@ -207,7 +233,8 @@ void set_value(Game g, Settings& s, const std::string& id, double value);
 // Kind::Text (0.4.8): the value as it may be stored and passed on. PeerIps (GitHub #229): IPv4 addresses only (what the
 // runtime's --net_peer_ip reads), separated by ", "; anything else is dropped, duplicates and 0.0.0.0 /
 // 255.255.255.255 too, at most 16 addresses. `dropped` (optional) gets how many entries were left out.
-// GraphicsCard (0.6.2, GitHub #304): an adapter's name - control characters and quotes dropped, trimmed, at most max_len bytes.
+// GraphicsCard (0.6.2, GitHub #304) and AudioDevice (GitHub #425): a device's name - control characters and quotes dropped,
+// trimmed, at most max_len bytes.
 std::string sanitize_text(const Option& o, const std::string& in, int* dropped = nullptr);
 // The characters a Kind::Text field accepts while typing (the rest are not entered at all).
 bool text_char_ok(const Option& o, unsigned c);
@@ -216,6 +243,9 @@ bool text_char_ok(const Option& o, unsigned c);
 std::string monitor_label(int index1, int width, int height, bool primary);
 // 0.6.2 (GitHub #304): the Graphics card option's saved name is one of env.graphics_cards (same letters, any case).
 bool graphics_card_present(const Environment& env, const std::string& name);
+// GitHub #425: the Output device option's saved name is one of env.audio_devices (same letters, any case, both as
+// sanitize_text keeps them).
+bool audio_device_present(const Environment& env, const std::string& name);
 // PS1 152: the main graphics card of a list.
 std::string main_gpu(const std::vector<std::string>& gpus);
 

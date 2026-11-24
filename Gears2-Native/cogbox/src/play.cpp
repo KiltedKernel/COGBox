@@ -8,6 +8,7 @@
 #include "x360fs.h"
 #include "crash_dump.h"
 #include "social_model.h"   // kPreferLobbyPrefix (0.6.4)
+#include "mod_conflicts.h"   // the mods' folders listed again when a game closes
 
 #include <windows.h>
 #include <cstdio>
@@ -24,6 +25,7 @@ static const char *exit_meaning(DWORD code)
     case 0xC0000374: return "its memory got corrupted (0xC0000374)";
     case 0xC000001D: return "this CPU lacks an instruction the build needs (0xC000001D) - the ports are built for CPUs with AVX2 (2013 and newer)";
     case 0xC0000135: return "a file it needs next to it is missing (0xC0000135) - unzip the COGBox release again, keeping every file";
+    case 0xC0000139: return "the game's exe and a DLL next to it are from different COGBox versions (0xC0000139) - unzip the COGBox release again over the old files, keeping every file";   // GitHub #382
     case 0xC0000142: return "a DLL it needs failed to start (0xC0000142)";
     case 0x887A0005: return "the graphics card stopped responding or its driver was reset (0x887A0005)";
     case 0x887A0006: return "the graphics card stopped responding (0x887A0006)";
@@ -39,7 +41,9 @@ static const char *exit_meaning(DWORD code)
 // System32, Windows, PATH), and the imports of the DLLs found outside Windows (ours, the runtime's) are checked too.
 // The file is mapped, not read, so only the header and import pages are touched. Delay-loaded DLLs don't stop a start
 // and are left out; api-ms-win-* / ext-ms-* names are API sets Windows resolves itself.
-static std::vector<std::string> pe_imports(const std::string &path)
+// GitHub #382: with `syms`, also each DLL's functions imported by name (ordinal imports are left out).
+typedef std::vector<std::pair<std::string, std::vector<std::string>>> ImportSyms;
+static std::vector<std::string> pe_imports(const std::string &path, ImportSyms *syms = nullptr)
 {
     std::vector<std::string> out;
     HANDLE f = CreateFileW(widen(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -85,6 +89,22 @@ static std::vector<std::string> pe_imports(const std::string &path)
                         std::string name;
                         for (uint64_t i = s; i < n && i < s + 260 && b[i]; i++) name += (char)b[i];
                         if (!name.empty()) out.push_back(name);
+                        if (syms && !name.empty()) {
+                            std::vector<std::string> fns;
+                            const bool is64 = magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+                            const uint64_t step = is64 ? 8 : 4;
+                            uint64_t th = off(d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk);
+                            for (int j = 0; j < 20000 && th + step <= n; j++, th += step) {
+                                const uint64_t v = is64 ? *(const uint64_t *)(b + th) : *(const uint32_t *)(b + th);
+                                if (!v) break;
+                                if (v >> (is64 ? 63 : 31)) continue;   // by ordinal
+                                const uint64_t ns = off((DWORD)v);
+                                std::string fn;
+                                for (uint64_t i = ns + 2; ns < n && i < n && i < ns + 2 + 512 && b[i]; i++) fn += (char)b[i];
+                                if (!fn.empty()) fns.push_back(fn);
+                            }
+                            syms->push_back({ name, fns });
+                        }
                     }
                 }
             }
@@ -148,6 +168,44 @@ static std::vector<std::string> missing_dlls(const std::string &exe)
     return missing;
 }
 
+// GitHub #382 (0xC0000139, STATUS_ENTRYPOINT_NOT_FOUND): the exe (or a DLL of ours it loads) imports a function that
+// the DLL found for it doesn't have - files from different COGBox versions side by side (a release unzipped partly, a
+// file the antivirus put back from an older copy). Checked for our own files only (the exe's folder and shared): each
+// such DLL is mapped without running its code and asked for every function its importer names. Empty = nothing found.
+static std::string mismatched_imports(const std::string &exe)
+{
+    const std::vector<std::string> dirs = dll_dirs(exe);
+    const size_t own = dir_exists(join(exe_dir(), "shared")) ? 2 : 1;
+    std::vector<std::string> seen, todo = { exe };
+    std::string out;
+    int found = 0;
+    for (size_t t = 0; t < todo.size() && t < 24 && found < 4; t++) {
+        ImportSyms syms;
+        pe_imports(todo[t], &syms);
+        const std::string importer = todo[t].substr(todo[t].find_last_of("\\/") + 1);
+        for (const auto &ds : syms) {
+            const std::string name = lower_ascii(ds.first);
+            if (name.rfind("api-ms-", 0) == 0 || name.rfind("ext-ms-", 0) == 0) continue;
+            size_t i = 0;
+            while (i < own && i < dirs.size() && !file_exists(join(dirs[i], ds.first))) i++;
+            if (i >= own || i >= dirs.size()) continue;   // not one of ours
+            const std::string dll = join(dirs[i], ds.first);
+            if (std::find(seen.begin(), seen.end(), name) == seen.end()) { seen.push_back(name); todo.push_back(dll); }
+            HMODULE h = LoadLibraryExW(widen(dll).c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
+            if (!h) continue;
+            int miss = 0;
+            std::string first;
+            for (const std::string &fn : ds.second)
+                if (!GetProcAddress(h, fn.c_str())) { if (!miss++) first = fn; }
+            FreeLibrary(h);
+            if (miss && found++ < 4)
+                out += (out.empty() ? "" : "; ") + importer + " needs " + std::to_string(miss) + " function(s) that " + ds.first +
+                       " doesn't have (first: " + first.substr(0, 80) + ")";
+        }
+    }
+    return out;
+}
+
 // What usually brings a missing DLL back (English: appended after the translated message, like the DLL names).
 static std::string dll_fix(const std::string &name)
 {
@@ -206,6 +264,7 @@ static void write_menu_file(App &a, int g, gs::Version ver, const std::string &l
     const std::map<std::string, std::vector<std::string>> live = gs::live_lines(G, ver, a.cur[g], a.env[g]);
     for (const gs::Option &o : gs::options(G)) {
         if (o.kind == gs::Kind::Text) continue;   // 0.4.8: typed in the launcher only (the in-game menu has no text field)
+        if (o.id == "Version") continue;          // 0.6.6: one version (the title update) - nothing to choose
         gs::Availability av = gs::available(o, G, ver, a.cur[g], a.env[g]);
         double v = a.cur[g].has(o.id) ? a.cur[g].f(o.id) : o.def;
         std::vector<std::string> choices = o.id == "Monitor" ? monitor_choices() : o.choices;
@@ -217,7 +276,16 @@ static void write_menu_file(App &a, int g, gs::Version ver, const std::string &l
         t += "[option]\r\nid=" + o.id + "\r\ntab=" + gs::tab_name(o.tab) + "\r\nlabel=" + one_line(tr(o.label)) + "\r\nkind=" + kind + "\r\n" + nums;
         if (!choices.empty()) {
             t += "choices=";
-            for (size_t i = 0; i < choices.size(); i++) t += (i ? "|" : "") + one_line(o.id == "Monitor" ? choices[i] : tr(choices[i]));
+            // 0.6.6: a choice that is no longer offered keeps its place (the value is the index) but goes out empty -
+            // the in-game menu leaves empty choices out of its list (AO: Off / Default / On; no dropped upscaler; no Match my monitor)
+            auto offered = [&](size_t i) {
+                if (o.id == "AO") return i <= 2;   // 0.6.7: Off is offered again (GitHub #406)
+                if (o.id == "AAMode" || o.id == "Resolution") return i != 4;
+                if (o.id == "FrameGen") return (int)i != gs::k_fgDropped;   // review 20 Nov: the dropped frame generation too
+                return true;
+            };
+            for (size_t i = 0; i < choices.size(); i++)
+                t += (i ? "|" : "") + (!offered(i) ? std::string() : one_line(o.id == "Monitor" ? choices[i] : tr(choices[i])));
             t += "\r\n";
         }
         if (auto it = live.find(o.id); it != live.end())
@@ -253,6 +321,15 @@ static bool apply_menu_changes(App &a, int g, const std::string &logDir)
     return file_exists(join(logDir, "menu-restart.flag"));
 }
 
+// 0.6.5: what the shaders were prepared for - the graphics API this game starts with and the adapters' drivers
+// (prepared-for.txt in the game's shader cache, written when Prepare all shaders finishes)
+static std::string prepared_key(App &a, int g)
+{
+    const std::string fp = report_graphics_fingerprint();
+    if (fp.empty()) return std::string();
+    return std::string(gs::runs_vulkan(a.cur[g], a.env[g]) ? "vulkan: " : "d3d12: ") + fp;
+}
+
 void play_start(App &a, int g, bool prepare)
 {
     if (a.run.proc) return;
@@ -264,6 +341,7 @@ void play_start(App &a, int g, bool prepare)
     refresh_games(a, false);
     GameState &st = a.st[g];
     if (st.ready != R_READY) { set_message(a, std::string(d.name) + " isn't ready to play yet - add your copy first.", true); return; }
+    if (!a.cur[g].str("AudioDevice").empty()) audio_devices_refresh(a);   // GitHub #425: a headset plugged in since
     env_refresh(a, g);
     gs::Game G = (gs::Game)g;
     gs::Version ver = gs::effective_version(G, a.cur[g], a.env[g]);
@@ -328,6 +406,25 @@ void play_start(App &a, int g, bool prepare)
                 return;
             }
         }
+        // 0.6.5 (job 2025: a start with nothing built - a new graphics driver, a new card or a first play - spends minutes
+        // compiling pipelines while the game is played, ~200 ms each): when this PC's graphics driver isn't the one the
+        // shaders were last prepared with, offer Prepare all shaders first (then the game starts by itself). Not for a
+        // Join (the lobby would be gone), not when the game can't prepare, and never again after "Don't ask again".
+        const bool canPrepare = a.env[g].cap.exe_has && a.env[g].cap.exe_has("gow2_renderer_prepare_all") && !a.env[g].recipe_pack.empty();
+        if (canPrepare && joinCode.empty() && !a.coldPrepOk[g] && a.ini.geti("Graphics", "AutoPrepareAsk", 1) != 0) {
+            std::string was;
+            read_file(join(game_shader_dir(g), "prepared-for.txt"), was, 8192);
+            const std::string now = prepared_key(a, g);
+            if (!now.empty() && was != now) {
+                ask(a, "coldprep", g, tr("Prepare the shaders first?"),
+                    std::string(tr(was.empty() ? "The shaders haven't been prepared for this PC yet."
+                                               : "Your graphics driver, graphics card or Graphics API has changed since the shaders were prepared.")) +
+                        " " + tr("Without them, the first minutes of play stutter while the graphics driver builds them.") + "\n\n" +
+                        tr("Prepare all shaders now? It takes a few minutes, once; the game then starts by itself."),
+                    { tr("Prepare now"), tr("Play now"), tr("Don't ask again") });
+                return;
+            }
+        }
     }
     // this play's own folder: the log, the arguments, any crash report
     std::string logDir = join(game_logs_dir(g), now_stamp());
@@ -373,7 +470,15 @@ void play_start(App &a, int g, bool prepare)
     }
     a.env[g].log_dir = logDir;
     std::vector<std::string> notes;
-    std::vector<std::string> args = gs::build_args(G, ver, a.cur[g], a.env[g], &notes);
+    // A "Prepare all shaders" run never goes online (Shagg): building shaders needs no network, and signed in as the
+    // profile it was a second copy of the player on the COGBox server for minutes - no --net_online,
+    // --net_live_emulation, --net_master_server or --net_identity_dir for it.
+    gs::Environment runEnv = a.env[g];
+    if (prepare) {
+        runEnv.online_server.clear();
+        runEnv.identity_dir.clear();
+    }
+    std::vector<std::string> args = gs::build_args(G, ver, a.cur[g], runEnv, &notes);
     std::string shared = join(exe_dir(), "shared");
     bool useShared = dir_exists(shared);
     if (useShared) args.push_back("--gow2_dxc_dir=\"" + shared + "\"");
@@ -413,14 +518,16 @@ void play_start(App &a, int g, bool prepare)
     {   // GitHub #194: a DLL the game can't start without, said before it fails with 0xC0000135
         const std::vector<std::string> miss = missing_dlls(exe);
         if (!miss.empty()) argText += "launcher: DLL(s) the game imports that aren't in its folder, shared, System32 or PATH: " + missing_dlls_text(miss) + "\r\n";
+        const std::string mism = mismatched_imports(exe);   // GitHub #382: said before it fails with 0xC0000139
+        if (!mism.empty()) argText += "launcher: files from different versions side by side: " + mism + "\r\n";
     }
     argText += "launcher: start prepared in " + std::to_string(SDL_GetTicks() - prep0) + " ms\r\n";
     write_file(join(logDir, "args.txt"), argText);
 
     // The upscaler and shader-compiler DLLs every game uses are kept once, in <COGBox>\shared (Shagg 20:27, option 1):
-    // the game gets that folder at the front of its PATH (FSR's loader and XeSS are loaded by name) and --gow2_dxc_dir
+    // the game gets that folder at the front of its PATH (FSR's loader is loaded by name) and --gow2_dxc_dir
     // (the renderer loads dxcompiler.dll from there). DLSS (NGX looks only beside the exe), dxil.dll and the runtime
-    // stay in each game folder. Checked by starting every game with FSR and XeSS from that layout (job 487).
+    // stay in each game folder. Checked by starting every game with FSR from that layout (job 487).
     std::wstring cmd = L"\"" + widen(exe) + L"\"";
     for (auto &s : args) cmd += L" " + widen(s);
     std::wstring envBlock;   // this process's environment with PATH = shared;PATH (empty = inherit as is)
@@ -535,6 +642,7 @@ void play_poll(App &a)
     a.run.proc = nullptr;
     achievements_tab_reload();   // achievements part 4: its new unlocks
     int g = a.run.game;
+    mod_conflicts_refresh(g);   // (the mods' folders listed again: a game run can be when files changed)
     const GameDef &d = game_def(g);
     int64_t secs = std::max<int64_t>(0, unix_now() - a.run.started);
     if (a.run.prepare) {   // job 641: no play time, no window juggling - say how it went
@@ -544,6 +652,18 @@ void play_poll(App &a)
         const bool done = prog.find(" done ") != std::string::npos;
         append_line(join(a.run.logDir, "args.txt"), "launcher: prepare all shaders ended after " + std::to_string(secs) + " s, exit code " +
                                                         (known ? hex32(code) : std::string("unknown")) + ", progress " + prog);
+        const bool thenPlay = a.prepThenPlay[g];
+        a.prepThenPlay[g] = false;
+        if (done && known && code == 0) {   // 0.6.5: prepared for this driver - the cold-start question stays away until it changes
+            const std::string fp = prepared_key(a, g);
+            if (!fp.empty()) write_file(join(game_shader_dir(g), "prepared-for.txt"), fp);
+        }
+        if (done && known && code == 0 && thenPlay) {   // 0.6.5: asked at Play - the game starts now
+            refresh_games(a, false);
+            a.coldPrepOk[g] = true;
+            play_start(a, g);
+            return;
+        }
         if (done && known && code == 0)
             ask(a, "info", g, "Shaders prepared",
                 std::string(d.name) + "'s shaders are ready (" + std::to_string(secs / 60) + " min " + std::to_string(secs % 60) +
@@ -585,6 +705,7 @@ void play_poll(App &a)
     bool restart = apply_menu_changes(a, g, a.run.logDir);
     if (known && code == 0 && crash.empty()) {
         if (restart) { append_line(join(a.run.logDir, "args.txt"), "launcher: restarting the game (in-game menu)"); play_start(a, g); }
+        else if (a.closeAfterPlay) { append_line(join(a.run.logDir, "args.txt"), "launcher: started with --play - closing"); a.quit = true; }
         return;
     }
     // 0.2.0 (GitHub #6): the game closed because FSR crashed inside the graphics driver - FSR off for this game (SMAA)
@@ -605,6 +726,10 @@ void play_poll(App &a)
         const std::vector<std::string> miss = missing_dlls(a.run.exe);
         what += miss.empty() ? std::string(". Missing DLL: none found by COGBox's check of the game's imports")
                              : ". Missing DLL: " + missing_dlls_text(miss);
+    }
+    if (known && code == 0xC0000139) {   // GitHub #382: which files (English, like the DLL names above)
+        const std::string mism = mismatched_imports(a.run.exe);
+        if (!mism.empty()) what += ". Mismatch: " + mism;
     }
     std::string log;
     if (read_file(join(a.run.logDir, d.logName), log, 64u << 20) &&
@@ -697,10 +822,8 @@ bool make_report(App &a, int g, const std::string &session, const std::string &w
         // Vulkan: experimental again in Gears 3 and Judgment (Shagg 3 Nov), not in Gears 1 / 2
         if (cs.i("Api") == 1 && (g == G_GEARS3 || g == G_JUDGMENT) && !a.wine) exp += "Vulkan, ";   // (the Proton path is Vulkan)
         // DLSS experimental again (Shagg 3 Nov: flickering in Gears 1 #147 and Judgment, smearing in Gears 3 #150); SMAA T2x is not
-        if (cs.i("AAMode") >= 2 && cs.i("AAMode") <= 4) exp += std::string(cs.i("AAMode") == 2 ? "FSR" : cs.i("AAMode") == 3 ? "DLSS" : "XeSS") + ", ";
-        if (cs.i("AO") >= 2) exp += "XeGTAO, ";   // experimental again (Shagg 3 Nov: about 5 ms a frame)
+        if (cs.i("AAMode") >= 2 && cs.i("AAMode") <= 3) exp += std::string(cs.i("AAMode") == 2 ? "FSR" : "DLSS") + ", ";
         if (cs.i("FrameGen") > 0) exp += "frame generation, ";
-        if (cs.b("SystemLink")) exp += "System Link, ";
         if (cs.b("HDR")) exp += "HDR, ";   // 0.4.6: experimental in all four games
         sys += "Experimental settings on: " + (exp.empty() ? std::string("none") : exp.substr(0, exp.size() - 2)) + "\r\n\r\n";
     }

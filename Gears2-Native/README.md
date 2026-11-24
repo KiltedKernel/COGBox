@@ -20,7 +20,7 @@ the ports what an emulator can't easily offer:
 
 - **Any resolution** - 1x to 4x the original (up to 5K) or matched to your monitor, with real extra detail, not a
   stretched picture.
-- **Anti-aliasing and upscaling** - SMAA, AMD FSR, NVIDIA DLSS and Intel XeSS, including upscaling modes for weaker GPUs.
+- **Anti-aliasing and upscaling** - SMAA, AMD FSR and NVIDIA DLSS, including upscaling modes for weaker GPUs.
 - **High frame rates** - the 30 fps limit lifted, vsync with a cap matched to your monitor, AMD FSR frame generation.
 - **Smooth play** - shaders are built on your PC and kept, pipelines are made in the background, and a texture that
   isn't ready yet shows a moment later instead of freezing the game.
@@ -98,7 +98,7 @@ saves and settings are not in the zip, so they are kept.
   them - here or anywhere. Issues or pull requests containing game files will be removed.
 - **What this project contains:** our own code (MIT licence, see `LICENSE`) and pieces of the Xenia emulator projects
   (BSD-3-Clause); the release adds the rexglue SDK runtime (BSD-3-Clause) and the vendors' own upscaler libraries (NVIDIA DLSS,
-  AMD FidelityFX, Intel XeSS) and the DirectX Shader Compiler under their own licences. Every licence is in
+  AMD FidelityFX) and the DirectX Shader Compiler under their own licences. Every licence is in
   `THIRD_PARTY_NOTICES.md` and in the release's `licenses` folder.
 - **Box art and backgrounds** are not included; COGBox downloads them from the x360db archive only when you ask, onto
   your own PC.
@@ -128,7 +128,7 @@ Plans, not promises:
   with NVIDIA FLIP, and unit tests.
 - Credits: the [Xenia](https://xenia.jp) project and its Canary / Edge forks, whose open code and research made the
   renderer's exact rules possible; the community Gears patches (ultrawide by boma and TudorHorse) ported as switches;
-  Xenia Manager's x360db for artwork; AMD, NVIDIA and Intel for their upscalers.
+  Xenia Manager's x360db for artwork; AMD and NVIDIA for their upscalers.
 
 Repository layout: `src/` the port and shared renderer (layer 0-3), `cogbox/` the launcher, `tools/` build and test
 scripts. Building it yourself needs your own game copy, the toolchain in `docs/building.md` (repository root) and

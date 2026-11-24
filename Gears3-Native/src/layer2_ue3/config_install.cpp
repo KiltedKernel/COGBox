@@ -17,6 +17,7 @@
 #include <ue3/mod_extras.h>
 #include <ue3/package_patch.h>
 #include <ue3/main_menu_exit.h>
+#include <ue3/playlist_names.h>
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -47,6 +48,7 @@
 // game's include folder (CMakeLists.txt), declared here so this game's own ue3/ headers are not shadowed.
 namespace ue3 {
 bool ReadPackageExportPaths(const std::filesystem::path& file, std::set<std::string>* out);
+uint64_t WholeCompressedSize(const std::filesystem::path& file);  // 0.6.5 (#367): Gears 2's package_exports.cpp
 }  // namespace ue3
 
 REXCVAR_DEFINE_STRING(ue3_ini_edits, "", "Gears3",
@@ -73,6 +75,8 @@ REXCVAR_DEFINE_STRING(ue3_package_patches, "", "Gears3",
                       "Script package byte patches, '<file>@<offset>:<old hex>><new hex>', ';'-separated (set by the "
                       "game's own switches; ue3/package_patch.h)");
 REXCVAR_DEFINE_BOOL(gow_main_menu_exit, true, "ui", "Add Exit Game to the main menu; restart");
+REXCVAR_DEFINE_BOOL(gow3_playlist_names, true, "ui",
+                    "Name the Forces of Nature Guardian playlist, which no shipped text names (ue3/playlist_names.h); restart");
 
 namespace {
 constexpr const char* kGameDevice = "\\Device\\Harddisk0\\Partition1";
@@ -585,10 +589,24 @@ std::map<std::string, std::filesystem::path> CollectMods(std::map<std::string, s
       // texture caches, movies), which go where the game keeps them (ue3/mod_extras.h)
       const std::string key = ue3::ModGameKey(rel, bundle_rel);
       if (key.empty()) continue;
-      const std::string ext = ModLower(it->path().extension().string());
+      const std::string ext = ModLower(rex::path_to_utf8(it->path().extension()));   // review r369 F5: string() throws on a name outside the code page
       if (ext == ".xex" || ext == ".xexp" || ext == ".dll" || ext == ".exe") {
         REXLOG_WARN("ue3_mods: {}: programs are not taken from mods - skipped", rex::path_to_utf8(it->path()));
         continue;
+      }
+      // A mod's own table of contents (<top folder>\*TOC*.txt, e.g. a fonts mod's whole WarGame\Xbox360TOC.txt) is not
+      // used: it was made from the modder's copy of the game (other title update / DLC / language files), and every other
+      // line in it would replace this game's. The game's own table is the base and InstallModOverlay rewrites the lines
+      // of the files the mods replace or add (size + MD5 from the mod's files), which is all a mod's table could change.
+      {
+        const size_t cut = key.find('\\');
+        const std::string leaf = cut == std::string::npos ? key : key.substr(cut + 1);
+        if (cut != std::string::npos && leaf.find('\\') == std::string::npos && leaf.find("toc") != std::string::npos &&
+            leaf.size() > 4 && leaf.compare(leaf.size() - 4, 4, ".txt") == 0) {
+          REXLOG_INFO("ue3_mods: {}: its own table of contents is not used - the game's is, with this mod's files' lines updated",
+                      rex::path_to_utf8(it->path()));
+          continue;
+        }
       }
       out[key] = it->path();
       ++n;
@@ -675,7 +693,8 @@ void InstallModOverlay(rex::Runtime* runtime, std::map<std::string, std::filesys
           listed.insert(k);
           auto it = files.find(k);
           if (it != files.end()) {
-            line = std::to_string(fs::file_size(it->second, ec)) + " 0 " + (tok.size() == 5 ? tok[2] + " " : std::string()) + path + " " +
+            line = std::to_string(fs::file_size(it->second, ec)) + " " + std::to_string(ue3::WholeCompressedSize(it->second)) + " " +  // 0.6.5 (#367): its own uncompressed size
+                   (tok.size() == 5 ? tok[2] + " " : std::string()) + path + " " +
                    Md5Hex(it->second);
             ++changed;
           }
@@ -691,7 +710,8 @@ void InstallModOverlay(rex::Runtime* runtime, std::map<std::string, std::filesys
         std::string rel = rex::path_to_utf8(host.filename());
         std::string guest = "..\\" + rex::path_to_utf8(topdir.filename()) + "\\" + k.substr(top.size() + 1);
         guest = guest.substr(0, guest.size() - rel.size()) + rel;   // keep the mod file's own name casing
-        added += std::to_string(fs::file_size(host, ec)) + (fields_seen == 5 ? " 0 0 " : " 0 ") + guest + " " + Md5Hex(host) + "\r\n";
+        added += std::to_string(fs::file_size(host, ec)) + " " + std::to_string(ue3::WholeCompressedSize(host)) +  // 0.6.5 (#367)
+                 (fields_seen == 5 ? " 0 " : " ") + guest + " " + Md5Hex(host) + "\r\n";
         ++changed;
       }
       outText = added + outText;
@@ -740,14 +760,15 @@ void Ue3InstallConfigEditsIfRequested(rex::Runtime* runtime) {
   } modsAtEnd{runtime, &mods, &modDirs};
   const std::string spec = REXCVAR_GET(ue3_ini_edits), pspec = REXCVAR_GET(ue3_package_patches);
   const bool exit_menu = REXCVAR_GET(gow_main_menu_exit);
-  if ((spec.empty() && pspec.empty() && !exit_menu) || !runtime || !runtime->file_system()) return;
+  const bool playlist_names = REXCVAR_GET(gow3_playlist_names);
+  if ((spec.empty() && pspec.empty() && !exit_menu && !playlist_names) || !runtime || !runtime->file_system()) return;
   std::string error;
   const std::vector<ue3::ConfigEdit> edits = spec.empty() ? std::vector<ue3::ConfigEdit>{} : ue3::ParseConfigEdits(spec, &error);
   if (!error.empty()) REXLOG_WARN("ue3_ini_edits: {}", error);
   error.clear();
   const std::vector<ue3::PackagePatch> patches = pspec.empty() ? std::vector<ue3::PackagePatch>{} : ue3::ParsePackagePatches(pspec, &error);
   if (!error.empty()) REXLOG_WARN("ue3_package_patches: {}", error);
-  if (edits.empty() && patches.empty() && !exit_menu) return;
+  if (edits.empty() && patches.empty() && !exit_menu && !playlist_names) return;
   namespace fs = std::filesystem;
   std::string rel = REXCVAR_GET(ue3_ini_bundle_dir);
   const fs::path src_dir = runtime->game_data_root() / fs::path(rel);
@@ -771,7 +792,7 @@ void Ue3InstallConfigEditsIfRequested(rex::Runtime* runtime) {
   const fs::path out_dir = out_root / fs::path(bundle_rel);
   fs::create_directories(out_dir, ec);
   std::vector<std::string> names;  // files we replace, in the bundle folder
-  if (!edits.empty() || exit_menu)
+  if (!edits.empty() || exit_menu || playlist_names)
     for (const auto& e : fs::directory_iterator(src_dir, ec)) {
       const std::string n = e.path().filename().string();
       if (e.is_regular_file() && n.size() > 14 && n.rfind("Coalesced_", 0) == 0 && n.ends_with(".bin")) names.push_back(n);
@@ -859,6 +880,12 @@ void Ue3InstallConfigEditsIfRequested(rex::Runtime* runtime) {
         for (const ue3::ConfigFile& f : bundle.files)  // candidates, for the next fix
           REXLOG_WARN("gow3_horde_bots:   bundle file: {}", f.name.Utf8());
       }
+    }
+    if (playlist_names) {
+      const int named = ue3::AddMissingPlaylistNames(bundle);
+      changed += named;
+      if (named > 0 && (AsciiLower(n) == "coalesced_int.bin" || written == 0))
+        REXLOG_INFO("playlist_names: {}: added {} Guardian playlist string(s)", n, named);
     }
     if (exit_menu) {
       const int exit_changed = ue3::ApplyMainMenuExitToBundle(ue3::GameId::Gears3, n, bundle);

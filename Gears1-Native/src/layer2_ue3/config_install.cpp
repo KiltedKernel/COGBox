@@ -42,6 +42,7 @@
 // read keeps its own language (no swap).
 namespace ue3 {
 bool ReadPackageExportPaths(const std::filesystem::path& file, std::set<std::string>* out);
+uint64_t WholeCompressedSize(const std::filesystem::path& file);  // 0.6.5 (#367): Gears 2's package_exports.cpp
 }  // namespace ue3
 
 REXCVAR_DEFINE_STRING(ue3_ini_edits, "", "Gears3",
@@ -474,10 +475,24 @@ std::map<std::string, std::filesystem::path> CollectMods(std::map<std::string, s
         continue;
       }
       if (key.find('\\') == std::string::npos) continue;   // files at the mod's top (mod.ini, readme) are its own
-      const std::string ext = ModLower(it->path().extension().string());
+      const std::string ext = ModLower(rex::path_to_utf8(it->path().extension()));   // review r369 F5: string() throws on a name outside the code page
       if (ext == ".xex" || ext == ".xexp" || ext == ".dll" || ext == ".exe") {
         REXLOG_WARN("ue3_mods: {}: programs are not taken from mods - skipped", rex::path_to_utf8(it->path()));
         continue;
+      }
+      // A mod's own table of contents (<top folder>\*TOC*.txt, e.g. a fonts mod's whole WarGame\Xbox360TOC.txt) is not
+      // used: it was made from the modder's copy of the game (other title update / DLC / language files), and every other
+      // line in it would replace this game's. The game's own table is the base and InstallModOverlay rewrites the lines
+      // of the files the mods replace or add (size + MD5 from the mod's files), which is all a mod's table could change.
+      {
+        const size_t cut = key.find('\\');
+        const std::string leaf = cut == std::string::npos ? key : key.substr(cut + 1);
+        if (cut != std::string::npos && leaf.find('\\') == std::string::npos && leaf.find("toc") != std::string::npos &&
+            leaf.size() > 4 && leaf.compare(leaf.size() - 4, 4, ".txt") == 0) {
+          REXLOG_INFO("ue3_mods: {}: its own table of contents is not used - the game's is, with this mod's files' lines updated",
+                      rex::path_to_utf8(it->path()));
+          continue;
+        }
       }
       out[key] = it->path();
       ++n;
@@ -564,7 +579,8 @@ void InstallModOverlay(rex::Runtime* runtime, std::map<std::string, std::filesys
           listed.insert(k);
           auto it = files.find(k);
           if (it != files.end()) {
-            line = std::to_string(fs::file_size(it->second, ec)) + " 0 " + (tok.size() == 5 ? tok[2] + " " : std::string()) + path + " " +
+            line = std::to_string(fs::file_size(it->second, ec)) + " " + std::to_string(ue3::WholeCompressedSize(it->second)) + " " +  // 0.6.5 (#367): its own uncompressed size
+                   (tok.size() == 5 ? tok[2] + " " : std::string()) + path + " " +
                    Md5Hex(it->second);
             ++changed;
           }
@@ -580,7 +596,8 @@ void InstallModOverlay(rex::Runtime* runtime, std::map<std::string, std::filesys
         std::string rel = rex::path_to_utf8(host.filename());
         std::string guest = "..\\" + rex::path_to_utf8(topdir.filename()) + "\\" + k.substr(top.size() + 1);
         guest = guest.substr(0, guest.size() - rel.size()) + rel;   // keep the mod file's own name casing
-        added += std::to_string(fs::file_size(host, ec)) + (fields_seen == 5 ? " 0 0 " : " 0 ") + guest + " " + Md5Hex(host) + "\r\n";
+        added += std::to_string(fs::file_size(host, ec)) + " " + std::to_string(ue3::WholeCompressedSize(host)) +  // 0.6.5 (#367)
+                 (fields_seen == 5 ? " 0 " : " ") + guest + " " + Md5Hex(host) + "\r\n";
         ++changed;
       }
       outText = added + outText;

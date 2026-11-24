@@ -33,7 +33,7 @@ include(cmake/rexglue.cmake)
 # Layer 0: Xbox 360 GPU core and game-free developer tooling (the shared copy in Gears2-Native).
 file(GLOB GN_LAYER0_SOURCES CONFIGURE_DEPENDS ${GN_LAYER0_DIR}/*.cpp ${GN_LAYER0_DIR}/renderer/*.cpp ${GN_LAYER0_DIR}/input/*.cpp)
 # The vendor-SDK wrappers are added below only when their SDK is there (job 052).
-list(FILTER GN_LAYER0_SOURCES EXCLUDE REGEX "(dlss|fsr|xess)_upscaler\\.cpp$")
+list(FILTER GN_LAYER0_SOURCES EXCLUDE REGEX "(dlss|fsr)_upscaler\\.cpp$")
 add_library(gn_layer0_xenos STATIC ${GN_LAYER0_SOURCES})
 target_include_directories(gn_layer0_xenos PUBLIC ${GN_LAYER0_DIR}/include)
 include(${GN_LAYER0_HOME}/cmake/spirv_opt.cmake)  # 0.6.1: SPIRV-Tools' optimiser for the Vulkan shader path
@@ -41,7 +41,7 @@ gn_add_spirv_opt(gn_layer0_xenos ${GN_THIRD_PARTY})
 target_include_directories(gn_layer0_xenos PRIVATE ${GN_THIRD_PARTY}/flip/src/cpp/tool)
 target_link_libraries(gn_layer0_xenos PUBLIC rex::runtime)
 set(GN_DEPS_THIRD_PARTY ${GN_THIRD_PARTY})
-include(${GN_LAYER0_HOME}/cmake/gn_deps.cmake)   # GN_DXC_DIR, GN_AGILITY_DIR, GN_XESS_DIR (0.4.9)
+include(${GN_LAYER0_HOME}/cmake/gn_deps.cmake)   # GN_DXC_DIR, GN_AGILITY_DIR (0.4.9)
 target_include_directories(gn_layer0_xenos PRIVATE ${GN_DXC_DIR}/inc)
 if(WIN32)
     target_link_libraries(gn_layer0_xenos PRIVATE dbghelp d3d12 dxgi dxguid ole32)
@@ -77,7 +77,8 @@ rexglue_apply_target_settings(gn_layer0_xenos)
 add_library(gn_layer2_ue3 STATIC src/layer2_ue3/launch_command_line.cpp src/layer2_ue3/config_bundle.cpp
             src/layer2_ue3/config_install.cpp src/layer2_ue3/package_patch.cpp src/layer2_ue3/lzx.cpp
             src/layer2_ue3/mod_extras.cpp src/layer2_ue3/objects.cpp src/layer2_ue3/script_input.cpp
-            src/layer2_ue3/modcore/modcore.cpp)
+            src/layer2_ue3/modcore/modcore.cpp
+            src/layer2_ue3/playlist_names.cpp)
 target_include_directories(gn_layer2_ue3 PUBLIC src/layer2_ue3/include)
 # modcore (MIT, from KiltedKernel's Gears 3 port): mod.ini rules, config fragments, bare-file mods (ue3/mod_extras.h)
 target_include_directories(gn_layer2_ue3 PRIVATE src/layer2_ue3)
@@ -98,6 +99,8 @@ set_source_files_properties(${GN_LAYER0_HOME}/src/layer2_ue3/shader_prebuild.cpp
 # GitHub #353: the shared name tags, with this game's own ue3/ headers (its objects.h: Gears 3's ue3::obj).
 target_sources(gn_layer2_ue3 PRIVATE ${GN_LAYER0_HOME}/src/layer2_ue3/name_tags.cpp)
 set_source_files_properties(${GN_LAYER0_HOME}/src/layer2_ue3/name_tags.cpp PROPERTIES COMPILE_DEFINITIONS GN_UE3_OBJECTS_GOW3=1)
+target_sources(gn_layer2_ue3 PRIVATE ${GN_LAYER0_HOME}/src/layer2_ue3/chat.cpp)  # in-match chat
+set_source_files_properties(${GN_LAYER0_HOME}/src/layer2_ue3/chat.cpp PROPERTIES COMPILE_DEFINITIONS GN_UE3_OBJECTS_GOW3=1)
 
 # Layer 3: Gears of War 3 (the executable).
 set(GOW3_SOURCES
@@ -106,6 +109,7 @@ set(GOW3_SOURCES
     src/layer3_gow3/extras.cpp
     src/layer3_gow3/mouse_look.cpp
     src/layer3_gow3/main_menu_exit.cpp
+    src/layer3_gow3/horde_bot_characters.cpp
     src/layer3_gow3/mod_chapters.cpp
     src/layer3_gow3/squad_catch_up.cpp
     src/layer3_gow3/kismet_trace.cpp
@@ -116,7 +120,9 @@ set(GOW3_SOURCES
     src/layer3_gow3/first_person.cpp  # --gow3_first_person (experimental first-person camera)
 )
 if(WIN32)
-    add_executable(gow3 WIN32 ${GOW3_SOURCES})
+    # GitHub #355: the game's own window / taskbar icon (res/gow3.rc; SDL takes the exe's first icon)
+    enable_language(RC)
+    add_executable(gow3 WIN32 ${GOW3_SOURCES} res/gow3.rc)
 else()
     add_executable(gow3 ${GOW3_SOURCES})
 endif()
@@ -188,8 +194,8 @@ if(GN_WITH_ANTILAG2 AND GN_AL2_FOUND)
     target_include_directories(gn_layer0_xenos PRIVATE ${GN_AL2_DIR})
 endif()
 
-# Upscalers (job 052, from Gears 2 notes/64 and notes/65): DLSS, FSR and XeSS are built in when their SDKs are in
-# Gears 2's third_party folder (read-only, never committed). GN_WITH_DLSS / GN_WITH_FSR / GN_WITH_XESS switch one off.
+# Upscalers (job 052, from Gears 2 notes/64 and notes/65): DLSS and FSR are built in when their SDKs are in
+# Gears 2's third_party folder (read-only, never committed). GN_WITH_DLSS / GN_WITH_FSR switch one off.
 set(GN_DLSS_DIR ${GN_THIRD_PARTY}/dlss-sdk)
 set(GN_FFX_DIR ${GN_THIRD_PARTY}/fidelityfx-sdk/Kits/FidelityFX CACHE PATH "AMD FSR SDK Kits/FidelityFX folder (fsr049: -DGN_FFX_DIR=... builds against another copy)")
 set(GN_DLSS_FOUND OFF)
@@ -200,14 +206,9 @@ set(GN_FFX_FOUND OFF)
 if(WIN32 AND EXISTS ${GN_FFX_DIR}/api/include/ffx_api.h AND EXISTS ${GN_FFX_DIR}/signedbin/amd_fidelityfx_loader_dx12.dll)
     set(GN_FFX_FOUND ON)
 endif()
-set(GN_XESS_FOUND OFF)
-if(WIN32 AND EXISTS ${GN_XESS_DIR}/inc/xess/xess_d3d12.h AND EXISTS ${GN_XESS_DIR}/bin/libxess.dll)
-    set(GN_XESS_FOUND ON)
-endif()
 option(GN_WITH_DLSS "Build NVIDIA DLSS in (needs Gears 2's third_party/dlss-sdk)" ${GN_DLSS_FOUND})
 option(GN_WITH_FSR "Build AMD FSR in (needs Gears 2's third_party/fidelityfx-sdk)" ${GN_FFX_FOUND})
-option(GN_WITH_XESS "Build Intel XeSS in (needs Gears 2's third_party/xess-sdk)" ${GN_XESS_FOUND})
-message(STATUS "Gears3-Native: upscalers - DLSS ${GN_WITH_DLSS} (SDK found: ${GN_DLSS_FOUND}), FSR ${GN_WITH_FSR} (SDK found: ${GN_FFX_FOUND}), XeSS ${GN_WITH_XESS} (SDK found: ${GN_XESS_FOUND})")
+message(STATUS "Gears3-Native: upscalers - DLSS ${GN_WITH_DLSS} (SDK found: ${GN_DLSS_FOUND}), FSR ${GN_WITH_FSR} (SDK found: ${GN_FFX_FOUND})")
 if(GN_WITH_DLSS AND GN_DLSS_FOUND)
     target_sources(gn_layer0_xenos PRIVATE ${GN_LAYER0_DIR}/renderer/dlss_upscaler.cpp)
     target_compile_definitions(gn_layer0_xenos PRIVATE GN_HAVE_DLSS)
@@ -245,15 +246,6 @@ if(GN_WITH_FSR AND GN_FFX_FOUND)
             ${GN_FFX_DIR}/signedbin/amd_fidelityfx_upscaler_dx12.dll
             ${GN_FFX_DIR}/signedbin/amd_fidelityfx_framegeneration_dx12.dll $<TARGET_FILE_DIR:gow3>
         COMMENT "Copying the FidelityFX loader, upscaler and frame-generation DLLs next to gow3.exe")
-endif()
-if(GN_WITH_XESS AND GN_XESS_FOUND)
-    target_sources(gn_layer0_xenos PRIVATE ${GN_LAYER0_DIR}/renderer/xess_upscaler.cpp)
-    target_compile_definitions(gn_layer0_xenos PRIVATE GN_HAVE_XESS)
-    target_include_directories(gn_layer0_xenos PRIVATE ${GN_XESS_DIR}/inc)
-    # No import library: xess_upscaler.cpp loads libxess.dll when XeSS is chosen, so the exe starts without it.
-    add_custom_command(TARGET gow3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GN_XESS_DIR}/bin/libxess.dll $<TARGET_FILE_DIR:gow3>
-        COMMENT "Copying libxess.dll next to gow3.exe")
 endif()
 
 # Profile-guided optimisation (job 143, Shagg 14:20 "You need to set up PGO"; method = Gears 2 patches 0159-0161, mails
@@ -358,8 +350,11 @@ if(GN_BUILD_TESTS)
         ${GN_LAYER0_TESTS}/layer0_texture_pack_test.cpp
         ${GN_LAYER0_DIR}/renderer/texture_pack.cpp
         tests/modcore_campaigns_test.cpp
-        src/layer2_ue3/modcore/modcore.cpp)
-    target_include_directories(gn_tests PRIVATE ${GN_LAYER0_DIR}/include ${GN_LAYER0_TESTS} src/layer2_ue3)
+        src/layer2_ue3/modcore/modcore.cpp
+        tests/playlist_names_test.cpp
+        src/layer2_ue3/playlist_names.cpp
+        src/layer2_ue3/config_bundle.cpp)
+    target_include_directories(gn_tests PRIVATE ${GN_LAYER0_DIR}/include ${GN_LAYER0_TESTS} src/layer2_ue3 src/layer2_ue3/include)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(gn_tests PRIVATE -ffp-contract=off)
     elseif(MSVC)
@@ -379,3 +374,9 @@ add_executable(gn_census tools/gn_census.cpp ${GN_LAYER0_DIR}/ucode.cpp)
 target_include_directories(gn_census PRIVATE ${GN_LAYER0_DIR}/include)
 add_executable(gn_hlsl_check tools/gn_hlsl_check.cpp ${GN_LAYER0_DIR}/ucode.cpp ${GN_LAYER0_DIR}/hlsl.cpp)
 target_include_directories(gn_hlsl_check PRIVATE ${GN_LAYER0_DIR}/include)
+
+# 0.6.6: Intel's upscaler DLLs are no longer built in or shipped. A build folder made before that still holds the
+# copies an older build put there; the packager refuses a folder that has them, so every build removes them.
+add_custom_command(TARGET gow3 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE_DIR:gow3>/libxess.dll $<TARGET_FILE_DIR:gow3>/libxess_fg.dll $<TARGET_FILE_DIR:gow3>/libxell.dll
+    COMMENT "Removing leftover Intel upscaler DLLs from the build folder")

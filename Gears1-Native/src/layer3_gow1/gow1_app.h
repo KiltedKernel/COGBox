@@ -8,6 +8,7 @@
 #include <rex/audio/flags.h>
 #include <rex/cvar.h>
 #include <rex/rex_app.h>
+#include <xenos/utf8_paths.h>
 #include "mouse_look.h"
 
 namespace rex::ui {
@@ -66,6 +67,8 @@ class Gow1App : public rex::ReXApp {
   // XenosLogSystemReport (Gears 2 launcher patch 0131, layer 0 system_report.cpp, picked up by our layer 0 glob): one
   // read-only report of Windows / CPU / memory / graphics cards + drivers / screens / controllers / build, for problem
   // reports.
+  // GitHub #389: path switches with non-ASCII letters, read as UTF-8 (xenos/utf8_paths.h)
+  void OnConfigurePaths(rex::PathConfig& paths) override { xenos::Utf8PathArguments(paths); }
   void OnPostInitLogging() override {
     XenosInstallCrashHandler();
     XenosLogSystemReport("Gears of War");
@@ -111,7 +114,7 @@ class Gow1App : public rex::ReXApp {
     // 30 Oct (Shagg's play test from My Game): blood decals stop z-fighting (job 713, the UE3 decal clamp); resolves write the
     // texture that reads them (job 047, GPU 8.1 -> 7.2 ms at 1440p); colour resolves fused at 2x and above (job 238/239).
     game_default("gow2_renderer_decal_min_bias", "0.01");
-    // Job 715 (DLSS / FSR / XeSS): Gears 1's c0-c3 are each object's object-to-world rows (15:16 probe), so the camera
+    // Job 715 (DLSS / FSR): Gears 1's c0-c3 are each object's object-to-world rows (15:16 probe), so the camera
     // matrix is found on the first scene draw, and the camera move is voted from those object rows.
     game_default("gow2_upscale_camera_matrix", "-1");
     game_default("gow2_upscale_object_constants", "0");
@@ -123,7 +126,7 @@ class Gow1App : public rex::ReXApp {
     // some with stencil shadows): upscaled there, they were drawn unjittered over the jittered depth and failed in
     // patches that changed with the jitter phase - the light strobing over characters. The last copy, as Judgment.
     game_default("gow2_upscale_scene_last_copy", "true");
-    // Gears 1 draws no AO and has no fog pass to anchor ours to: with --gow2_ao=gtao, XeGTAO / CACAO is multiplied into
+    // Gears 1 draws no AO and has no fog pass to anchor ours to: with --gow2_ao=gtao, XeGTAO is multiplied into
     // the scene at its first full-screen scene copy, which comes right before the per-light passes - so only the base
     // pass's light (lightmaps, ambient) is darkened, not each light's own.
     game_default("gow2_ao_add_at_scene_copy", "true");

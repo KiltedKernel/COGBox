@@ -9,6 +9,7 @@
 #include <rex/runtime.h>
 #include <rex/system/xmemory.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -120,6 +121,8 @@ namespace {
 std::atomic<uint32_t> g_cls{0};
 std::atomic<int> g_name_off{-1}, g_id_off{-1};
 std::atomic<bool> g_class_set_due{false};  // Gears 1 / 2: a name needs its tag (the game thread does the class-wide set)
+std::atomic<int> g_backoff_s{1};  // Gears 1 / 2: seconds before the next class-wide attempt (review r366 (4))
+std::chrono::steady_clock::time_point g_next_try{};  // Gears 1 / 2: game thread only (the tick and the set's callback)
 // the style's markup around "#1234", set once (Ue3NameTagsTick) before anything reads it; published through an atomic
 // pointer for the worker and the text hooks
 struct Markup {
@@ -205,7 +208,12 @@ void Worker(bool (*objects_ready)(), bool class_set, std::string style_font) {
     for (const uint32_t pri : Pris(g_cls.load())) {
       bool plain = true, changed = false;
       const std::string name = TaggedName(pri, &plain, &changed);
-      if (!changed) continue;
+      if (!changed) {
+        // review r366 (3): tagged now (or needs none) - forget what was queued, so a name the engine puts back later
+        // (a new round, a re-replicated PRI at the same address) is tagged again; it also keeps the map small
+        asked.erase(pri);
+        continue;
+      }
       if (class_set) {
         g_class_set_due = true;
         break;
@@ -238,6 +246,14 @@ void Ue3NameTagsTick(bool (*objects_ready)(), const Ue3NameTagStyle& style) {
   // included (the class-wide set changes them all) - its name now and the name it should have; then the set, and in
   // its callback (the same frame) each name written back into its new engine-owned buffer.
   if (!style.class_set || !g_class_set_due.exchange(false)) return;
+  // review r366 (4): an attempt that can't finish (a name that isn't plain ASCII, a `set` the engine refused, a write
+  // that didn't fit) used to come back every second, each time a whole object-table walk on the game thread. The next
+  // attempt waits 1, 2, 4 ... 64 s while attempts keep being needed; an attempt that finds nothing to change resets it.
+  const auto now_t = std::chrono::steady_clock::now();
+  if (now_t < g_next_try) return;
+  const int wait_s = g_backoff_s.load();
+  g_next_try = now_t + std::chrono::seconds(wait_s);
+  g_backoff_s = std::min(wait_s * 2, 64);  // put back to 1 by a write-back that wrote every name
   const uint32_t cls = g_cls.load();
   struct Want { uint32_t object; std::string name; };
   std::vector<Want> all;
@@ -250,13 +266,21 @@ void Ue3NameTagsTick(bool (*objects_ready)(), const Ue3NameTagStyle& style) {
     change = change || changed;
     all.push_back({o, std::move(name)});
   }
-  if (!change) return;
+  if (!change) {
+    g_backoff_s = 1;  // every name already right: the next need is tried at once
+    g_next_try = {};
+    return;
+  }
   const std::string placeholder(160, 'x');
   for (const Want& w : all) if (w.name.size() + 1 > placeholder.size()) return;  // never: names are short
   const int name_off = g_name_off.load();
   Ue3ConsoleQueueTrusted("set PlayerReplicationInfo PlayerName " + placeholder, [all, name_off] {
     int written = 0;
     for (const Want& w : all) written += WriteName(w.object + uint32_t(name_off), w.name) ? 1 : 0;
+    if (written == int(all.size())) {  // all done: a player who joins later is tagged at once
+      g_backoff_s = 1;
+      g_next_try = {};
+    }
     REXLOG_DEBUG("name tags: {} of {} names written back", written, all.size());
   });
 }
@@ -266,16 +290,19 @@ namespace {
 const Ue3TextHookCheck* g_checks = nullptr;   // the game's (constant-initialized: set by a static initializer)
 size_t g_check_count = 0;
 std::atomic<bool> g_text_ok{false};           // the checks passed: the hooks clean text
+thread_local int t_canvas_calls = 0;          // this thread is inside a Canvas exec native (Ue3CanvasTextCall)
 
 // Scratch copies: a ring of guest-memory slots of our own (system heap), each a text of up to kMaxText characters and
 // an FString after it. A slot is needed only for the one call it is passed to: the hooked routines measure the text, or
-// draw it (turning it into glyph quads) before they return - they keep no pointer to it. At most a few slots per call
+// draw it (turning it into glyph quads) before they return - they keep no pointer to it. Only inside a Canvas exec native
+// (Ue3CanvasTextCall), so only the script's draw calls on the game thread take slots. At most a few slots per call
 // (only arguments holding the markup take one); the ring is far longer than any nesting of these calls.
 constexpr uint32_t kMaxText = 256, kSlots = 64, kSlotBytes = 0x220, kSlotFString = 0x210;
 std::atomic<uint32_t> g_scratch{0}, g_scratch_next{0};
 
 void AllocScratch() {
   if (g_check_count == 0 || g_scratch.load()) return;   // no hooks in this game
+  if (Mk().before.empty() && Mk().after.empty()) return;   // no markup in use: the hooks have nothing to take out
   rex::Runtime* rt = rex::Runtime::instance();
   const uint32_t a = rt && rt->memory() ? rt->memory()->SystemHeapAlloc(kSlots * kSlotBytes) : 0;
   g_scratch.store(a, std::memory_order_release);
@@ -345,7 +372,9 @@ void CheckTextHooks() {
     passed += ok ? 1 : 0;
   }
   g_text_ok.store(passed == g_check_count, std::memory_order_release);
-  if (passed == g_check_count) REXLOG_INFO("name tags: kill feed text hooks on ({} Canvas natives as expected)", passed);
+  if (passed == g_check_count && Mk().before.empty() && Mk().after.empty())
+    REXLOG_INFO("name tags: kill feed text hooks idle - the tags have no markup to take out");
+  else if (passed == g_check_count) REXLOG_INFO("name tags: kill feed text hooks on ({} Canvas natives as expected)", passed);
   else REXLOG_WARN("name tags: kill feed text hooks off - {} of {} Canvas natives are not this build's", g_check_count - passed, g_check_count);
 }
 }  // namespace
@@ -355,11 +384,24 @@ void Ue3NameTagsTextHookChecks(const Ue3TextHookCheck* checks, size_t count) {
   g_check_count = count;
 }
 
+namespace {
+// Once per run, the first time a draw call's text is cleaned: proof in the log that the kill feed's names reach the
+// hooks through the Canvas natives (review r368b).
+uint32_t NoteCleaned(uint32_t copy) {
+  static std::atomic<bool> noted{false};
+  if (!noted.exchange(true, std::memory_order_relaxed)) REXLOG_INFO("name tags: a tagged name cleaned in a Canvas draw call (the kill feed's path; first time this run)");
+  return copy;
+}
+}  // namespace
+
+Ue3CanvasTextCall::Ue3CanvasTextCall() { ++t_canvas_calls; }
+Ue3CanvasTextCall::~Ue3CanvasTextCall() { --t_canvas_calls; }
+
 uint32_t Ue3NameTagsTextArg(uint32_t arg) {
-  if (!g_text_ok.load(std::memory_order_acquire)) return arg;
+  if (t_canvas_calls <= 0 || !g_text_ok.load(std::memory_order_acquire)) return arg;   // only the script's draw calls
   if (Mk().before.empty() && Mk().after.empty()) return arg;   // tags without markup: nothing to take out
   uint32_t count = 0, len = 0;
-  if (const uint32_t c = CleanCopy(arg, &count, &len)) return c;   // the text itself
+  if (const uint32_t c = CleanCopy(arg, &count, &len)) return NoteCleaned(c);   // the text itself
   // an FString {data, count, max} - only when its count is its text's length + 1 and max at least that, so another
   // struct whose first word points at a name is never taken for one: a scratch FString of the clean copy
   if (arg < 0x40000000 || arg >= 0x80000000 || (arg & 3) || !obj::Readable(arg, 12)) return arg;
@@ -369,5 +411,5 @@ uint32_t Ue3NameTagsTextArg(uint32_t arg) {
   if (!c || len + 1 != num) return arg;
   const uint32_t f = c + kSlotFString;
   if (!obj::Write32(f, c) || !obj::Write32(f + 4, count) || !obj::Write32(f + 8, count)) return arg;
-  return f;
+  return NoteCleaned(f);
 }

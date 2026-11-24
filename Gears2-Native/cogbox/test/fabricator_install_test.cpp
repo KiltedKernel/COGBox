@@ -8,15 +8,18 @@
 //   g++ -std=c++17 -Wall -Wextra -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -Ithird_party/imgui -I$SDL
 //       -Ithird_party -Isrc -I../src/layer2_ue3/include -I../src/layer0_xenos/include -I../../Gears3-Native/src/layer2_ue3
 //       test/fabricator_install_test.cpp src/fabricator_install.cpp src/mods.cpp src/fabricator_model.cpp src/mod_file_rules.cpp src/util.cpp
+//       src/mod_conflicts.cpp src/mod_conflicts_scan.cpp   (mods_list asks for the mods' conflicts)
 //       src/gears_settings.cpp src/i18n.cpp ../../Gears3-Native/src/layer2_ue3/modcore/modcore.cpp miniz.o
 //       -static-libgcc -static-libstdc++ <SDL3 mingw>/x86_64-w64-mingw32/lib/libSDL3.dll.a -lshell32 -lole32 -luuid
 //       -lbcrypt -ladvapi32 -o fabricator_install_test.exe   (SDL3.dll beside it: mods.cpp's texture-pack count uses SDL_GetTicks)
 #include "../src/app.h"
 #include "../src/fabricator_install.h"
 #include "../src/fabricator_model.h"
+#include "../src/mod_conflicts.h"
 #include "../third_party/miniz/miniz.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -260,10 +263,16 @@ int main()
         CHECK(text_of(join(mods, "Foo\\GearGame\\a.xxx")) == "f4");
         CHECK(!exists(join(br, ".old-Foo")));
         CHECK(text_of(join(br, "Foo.old\\GearGame\\a.xxx")) == "fo1");
-        // a crash after the move (both there): .old-Foo is the superseded backup, removed (it has a record)
+        // audit F1: a .old-Foo COGBox didn't make (a record, no token of COGBox's) is never removed - refused
         make_dirs(join(br, ".old-Foo"));
         FabInstallRecord rec; rec.name = "Foo"; rec.version = "1";
         fab_write_record(join(br, ".old-Foo"), rec);
+        write_file(join(br, ".old-Foo\\keep.txt"), "keep");
+        CHECK(fab_uninstall(a, g, "Foo") != "");
+        CHECK(text_of(join(br, ".old-Foo\\keep.txt")) == "keep");
+        DeleteFileW(widen(join(br, ".old-Foo\\keep.txt")).c_str());
+        // a crash after the move (both there): .old-Foo is the superseded backup, removed (a record and COGBox's token)
+        CHECK(dir_claim(join(br, ".old-Foo")));
         CHECK(fab_uninstall(a, g, "Foo") == "");
         CHECK(text_of(join(br, "Foo\\GearGame\\a.xxx")) == "f4");
         CHECK(!exists(join(br, ".old-Foo")));
@@ -470,10 +479,18 @@ int main()
         CHECK(fab_write_record(recorded, rec));
         make_dirs(handOwn);
         write_file(join(handOwn, "x.xxx"), "x");
+        // audit F1: a .partial with a record but no token of COGBox's (a forged one) is left alone
+        const std::string forged = join(mods, "Forged.partial");
+        make_dirs(forged);
+        write_file(join(forged, "y.xxx"), "y");
+        CHECK(fab_write_record(forged, rec));
+        CHECK(dir_claim(recorded));
         fab_sweep_partials(g);
         CHECK(!exists(recorded));                 // COGBox's unfinished install: removed
-        CHECK(text_of(join(handOwn, "x.xxx")) == "x");   // no record: left alone
+        CHECK(text_of(join(handOwn, "x.xxx")) == "x");   // not COGBox's: left alone
+        CHECK(text_of(join(forged, "y.xxx")) == "y");    // a record alone doesn't make it COGBox's
         remove_tree(widen(handOwn));
+        remove_tree(widen(forged));
 
         // the record is written before the unpack: a failed unpack leaves nothing; a finished one has it
         FabInstallItem ti;
@@ -555,6 +572,42 @@ int main()
         err.clear();
         CHECK(!mods_unpack_zip(a, g, zp, dest3, false, err));
         CHECK(!exists(join(dest3, "liar.bin")));   // the half-written entry is not left
+    }
+
+    // ---- mods the game leaves out (review of the conflicts): mod.ini enabled = false, another game's - a problem line
+    // (Gears 2 runs modcore's mod.ini rules too), and their files are not counted against the mods that are used ----
+    {
+        for (const char *n : { "Left Out", "Kept", "Wrong Game" }) make_dirs(join(mods, std::string(n) + "\\GearGame\\CookedXenon"));
+        write_file(join(mods, "Left Out\\mod.ini"), "[Mod]\nName = Left Out\nGame = gears2\nenabled = false\n");
+        write_file(join(mods, "Wrong Game\\mod.ini"), "[Mod]\nName = Wrong Game\nGame = gears3\n");
+        write_file(join(mods, "Kept\\mod.ini"), "[Mod]\nName = Kept\nGame = gears2\n");
+        for (const char *n : { "Left Out", "Kept", "Wrong Game" }) write_file(join(mods, std::string(n) + "\\GearGame\\CookedXenon\\Shared.xxx"), n);
+        a.ini.set("Mods", "gears2Order", "Left Out|Wrong Game|Kept");
+        a.ini.set("Mods", "gears2Enabled", "Left Out|Wrong Game|Kept");
+        std::vector<ModItem> v = mods_list(a, g);
+        const int lo = index_of(v, "Left Out"), wg = index_of(v, "Wrong Game"), kp = index_of(v, "Kept");
+        CHECK(lo >= 0 && v[lo].problem.find("enabled = false") != std::string::npos);
+        CHECK(wg >= 0 && v[wg].problem.find("made for") != std::string::npos);
+        CHECK(kp >= 0 && v[kp].problem.empty());
+        // the worker's result (a few seconds at most): Kept shares Shared.xxx with both, but neither is used
+        std::shared_ptr<const ModConflictSet> cs;
+        for (int t = 0; t < 300 && !cs; t++) { cs = mod_conflicts_get(g); if (!cs) std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        CHECK(cs != nullptr);
+        const ModConflicts *c = cs ? cs->find("Kept") : nullptr;
+        CHECK(c != nullptr && c->replaces.empty() && c->replaced_by.empty());
+        // and with the mod.ini switch on again, the same file is a conflict Kept wins
+        write_file(join(mods, "Left Out\\mod.ini"), "[Mod]\nName = Left Out\nGame = gears2\n");
+        v = mods_list(a, g);
+        CHECK(index_of(v, "Left Out") >= 0 && v[index_of(v, "Left Out")].problem.empty());
+        cs.reset();
+        for (int t = 0; t < 300; t++) {
+            cs = mod_conflicts_get(g);
+            c = cs ? cs->find("Kept") : nullptr;
+            if (c && !c->replaces.empty()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(c != nullptr && c->replaces.size() == 1 && c->replaces[0].other_name == "Left Out" && c->replaces[0].count == 1);
+        mod_conflicts_shutdown();
     }
 
     remove_tree(widen(g_root));

@@ -20,6 +20,8 @@
 
 namespace xenos::hlsl {
 
+// 0.6.5: every field is part of the DXBC store's key - a new field must also go into ShaderCache::DxbcStoreKey
+// (shader_cache.cpp), or a stored translation made with the other value could be used.
 struct HlslOptions {
   // Patch 0059 (DXBC back end only - the HLSL path ignores these; all off = the 0055 output, unchanged):
   // dxbc_loop_only_if_needed: a straight-line shader is wrapped in a one-pass loop only when it has a conditional
@@ -48,6 +50,12 @@ struct HlslOptions {
   // inputs: patch index as float, domain location u/v, r1.x the corner-swizzle selector = identity) - for an N x N
   // grid of two triangles per cell. The first patch comes from xe_sys0.y (VGT_INDX_OFFSET), as the vertex offset does.
   uint32_t tess_quad_segments = 0;
+  // Speed study (pixel shaders): no alpha test in the epilogue (no discard, so early depth rejection stays on). For
+  // draws whose alpha test is off; the renderer picks this variant per draw.
+  bool no_alpha_test = false;
+  // Speed study (19 Nov, job 2127): a pixel shader drawn with no colour target bound (stencil / depth passes of masked
+  // surfaces) without its colour outputs, so only what feeds the alpha test, kills and depth is left (DXBC path).
+  bool no_color_outputs = false;
   // Float-constant compaction (speed; off by default until a renderer run proves it): when a shader reads no
   // constant relatively and its reads leave a gap of kCompactMinGap+ registers, absolute reads index a compacted
   // array - c[0, float_constants_low) then c[float_constants_high, float_constants) - see Translation.
@@ -84,6 +92,9 @@ struct HlslOptions {
   // Job 634 (DXBC back end, with tex_post_constants): the post-processing as multiply-adds and selects on per-slot
   // constants (TexPostAffine below) - ~45 instructions a fetch instead of ~100, the same values bit for bit.
   bool tex_post_affine = false;
+  // Speed study (19 Nov, with tex_post_affine): the whole post-processing inside one uniform branch, skipped when the
+  // slot's step masks are all 0 and its exponent adjust is 1 (the fetch's value is used as sampled). Same values.
+  bool tex_post_skip_identity = false;
   // Job 634 (DXBC back end): the legacy multiply's zero rule as min(|x|, |y|) != 0 (four instructions, same bits).
   bool dxbc_mul_min_abs = false;
   // Job 634 (DXBC back end): forward-jump-only programs as nested if / else instead of the pc loop.

@@ -10,6 +10,7 @@
 // Our code (MIT).
 #include <ue3/config_bundle.h>
 #include <ue3/main_menu_exit.h>
+#include <ue3/mod_extras.h>
 #include <ue3/package_exports.h>
 
 #include <rex/cvar.h>
@@ -465,6 +466,20 @@ std::string RelKey(std::string rel) {
 REXCVAR_DEFINE_STRING(gow2_movie_voice_group, "auto", "Gears2",
                       "Ticket 1 / #103: movie voices from Bink track group N (auto = the only extra group when the game "
                       "language is not English; off; 1..n)");
+// GitHub #375: the pre-rendered movies follow the Voice language, not the text language. The game asks Bink for the
+// track IDs of its TEXT language's group; with --ue3_voice_language set to another language the header is shown with
+// that group's IDs swapped with the voice language's (the same 12-byte swap as above, between two groups, or a group
+// and the base mix for English). That needs to know which language each group holds, which the file does not say:
+// --gow2_movie_voice_order lists the languages of groups 1..n as the voice codes. Empty = the movies keep the text
+// language. Only with --gow2_movie_voice_group=auto, and only for a movie with exactly as many groups as the list.
+// 0.6.6 default "FRA,ITA,DEU,ESN,ESM" (Shagg 20 Nov: fix it without waiting): the retail movies carry five groups and
+// the industry's fixed order for them is E-F-I-G-S (English base, French, Italian, German, Spanish) with Latin American
+// Spanish last. NOT MEASURED BY EAR YET. It only acts when the Voice language differs from the text language - a case
+// that played the wrong (text) language before, so a wrong guess cannot break a setup that was right.
+REXCVAR_DEFINE_STRING(gow2_movie_voice_order, "FRA,ITA,DEU,ESN,ESM", "Gears2",
+                      "GitHub #375: the languages of the movies' voice groups 1..n, so movies play in "
+                      "--ue3_voice_language (default: the usual E-F-I-G-S order plus ESM); empty = movies keep the "
+                      "text language");
 
 namespace {
 // -1 off, 0 auto, n forced
@@ -483,12 +498,47 @@ bool MovieGameLanguageNotEnglish() {
   const std::string ul = rex::cvar::GetFlagByName("user_language");
   return !ul.empty() && ul != "0" && ul != "1";
 }
+// GitHub #375. The voice groups' languages in upper case (--gow2_movie_voice_order), group 1 first.
+std::vector<std::string> MovieVoiceOrder() {
+  std::vector<std::string> out;
+  std::string cur;
+  for (char c : std::string(REXCVAR_GET(gow2_movie_voice_order)) + ",") {
+    if (c == ',' || c == ';' || c == ' ') {
+      if (!cur.empty()) out.push_back(cur);
+      cur.clear();
+    } else {
+      cur += char(std::toupper(uint8_t(c)));
+    }
+  }
+  return out;
+}
+// GitHub #375: which group the game asks for (its text language) and which one should play (the voice language);
+// 0 = the base mix (English), 1..n = a group of `order`. False when the movies need no change or it cannot be told.
+bool MovieVoiceSwap(const std::vector<std::string>& order, uint32_t* asked, uint32_t* wanted) {
+  std::string voice = REXCVAR_GET(ue3_voice_language);
+  for (char& c : voice) c = char(std::toupper(uint8_t(c)));
+  if (order.empty() || voice.size() != 3) return false;
+  const std::string ul = rex::cvar::GetFlagByName("user_language");
+  // the console language as the first two letters of the game's language code (as AddVoiceLanguage does)
+  const char* text = ul == "2" ? "JP" : ul == "3" ? "DE" : ul == "4" ? "FR" : ul == "5" ? "ES" : ul == "6" ? "IT" : "IN";
+  auto group = [&](const std::string& lang, size_t letters, uint32_t* g) {
+    if (lang.compare(0, letters, "INT", letters) == 0) { *g = 0; return true; }
+    for (size_t i = 0; i < order.size(); ++i)
+      if (order[i].compare(0, letters, lang, 0, letters) == 0) { *g = uint32_t(i + 1); return true; }
+    return false;
+  };
+  // a text language the movies have no group for plays the base mix (ticket 1: the US game with Japanese text)
+  if (!group(text, 2, asked)) *asked = 0;
+  if (!group(voice, 3, wanted)) return false;   // the movies have no such voices: left as they are
+  return *asked != *wanted;
+}
 }  // namespace
 
 // Whether any movie may change (decides whether the folder view is needed when nothing else needs it).
 static bool MovieVoiceWanted() {
   const int s = MovieVoiceSetting();
-  return s > 0 || (s == 0 && MovieGameLanguageNotEnglish());
+  uint32_t asked = 0, wanted = 0;
+  return s > 0 || (s == 0 && (MovieGameLanguageNotEnglish() || MovieVoiceSwap(MovieVoiceOrder(), &asked, &wanted)));
 }
 
 // The header bytes to change for this .bik (offset -> value), or none. `why` says what was chosen.
@@ -513,6 +563,25 @@ static std::vector<std::pair<size_t, uint8_t>> MovieVoicePatch(const std::filesy
   if (got < ids + 4 * size_t(n)) return out;
   for (uint32_t i = 0; i < n; ++i)
     if (le32(ids + 4 * i) != i) { *why = "track IDs are not 0..n-1 - left as it is"; return out; }
+  // the three tracks (L, R, C) of group x; 0 = the base mix
+  auto track = [](uint32_t x, int k) { return x ? 6 + 3 * (x - 1) + uint32_t(k) : (k == 2 ? 5u : uint32_t(k)); };
+  if (s == 0) {   // GitHub #375: the voice language's group plays where the game asks for its text language's
+    const std::vector<std::string> order = MovieVoiceOrder();
+    uint32_t asked = 0, wanted = 0;
+    if (order.size() == groups && MovieVoiceSwap(order, &asked, &wanted)) {
+      for (int k = 0; k < 3; ++k) {
+        const uint32_t a = track(asked, k), b = track(wanted, k);
+        for (int byte = 0; byte < 4; ++byte) {
+          out.emplace_back(ids + 4 * a + byte, uint8_t(b >> (8 * byte)));
+          out.emplace_back(ids + 4 * b + byte, uint8_t(a >> (8 * byte)));
+        }
+      }
+      *why = std::format("{} audio tracks ({} voice group(s)) - voice language: tracks {},{},{} play as {},{},{} "
+                         "(--gow2_movie_voice_order, GitHub #375)", n, groups, track(wanted, 0), track(wanted, 1),
+                         track(wanted, 2), track(asked, 0), track(asked, 1), track(asked, 2));
+      return out;
+    }
+  }
   uint32_t g = 0;
   if (s > 0) g = uint32_t(s) <= groups ? uint32_t(s) : 0;
   else if (groups == 1 && MovieGameLanguageNotEnglish()) g = 1;
@@ -808,38 +877,50 @@ int AddVoiceLanguage(const std::filesystem::path& game, std::map<std::string, st
 std::map<std::string, std::filesystem::path> CollectMods(std::map<std::string, std::filesystem::path>* dirs) {
   namespace fs = std::filesystem;
   std::map<std::string, fs::path> out;
-  std::string spec = REXCVAR_GET(ue3_mods);
-  size_t at = 0;
-  while (at <= spec.size()) {
-    size_t end = spec.find(';', at);
-    if (end == std::string::npos) end = spec.size();
-    std::string one = spec.substr(at, end - at);
-    at = end + 1;
-    while (!one.empty() && (one.back() == ' ' || one.back() == '"')) one.pop_back();
-    while (!one.empty() && (one.front() == ' ' || one.front() == '"')) one.erase(0, 1);
-    if (one.empty()) continue;
-    const fs::path root = rex::to_path(one);
+  // the folders with their mod.ini rules applied (requires, game, enabled; ue3/mod_extras.h)
+  const std::string bundle_rel = REXCVAR_GET(ue3_ini_bundle_dir);
+  for (const fs::path& root : ue3::ActiveModFolders(REXCVAR_GET(ue3_mods))) {
+    const std::string one = rex::path_to_utf8(root);
     std::error_code ec;
-    if (!fs::is_directory(root, ec)) {
-      REXLOG_WARN("ue3_mods: {} is not a folder - skipped", one);
-      continue;
-    }
     int n = 0;
     for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-      if (it->is_symlink(ec)) { it.disable_recursion_pending(); continue; }   // never follow links out of the mod
-      const fs::path relp = fs::relative(it->path(), root, ec);
-      if (ec || relp.empty() || relp.is_absolute() || *relp.begin() == "..") continue;
-      const std::string key = RelKey(rex::path_to_utf8(relp));
-      if (it->is_directory(ec)) {
-        (*dirs)[key] = it->path();
+      if (it->is_symlink(ec)) {   // never follow links out of the mod
+        REXLOG_WARN("ue3_mods: {}: {} is a link (junction or symlink) - not followed, its files are not used", one,
+                    rex::path_to_utf8(fs::relative(it->path(), root, ec)));
+        it.disable_recursion_pending();
         continue;
       }
-      if (key.find('\\') == std::string::npos) continue;   // files at the mod's top (mod.ini, readme) are its own
-      const std::string ext = ModLower(it->path().extension().string());
+      const fs::path relp = fs::relative(it->path(), root, ec);
+      if (ec || relp.empty() || relp.is_absolute() || *relp.begin() == "..") continue;
+      const std::string rel = RelKey(rex::path_to_utf8(relp));
+      if (it->is_directory(ec)) {
+        if (rel == "config" || rel.rfind("config\\", 0) == 0) { it.disable_recursion_pending(); continue; }   // fragments
+        (*dirs)[rel] = it->path();
+        continue;
+      }
+      // files at the mod's top (mod.ini, readme) are its own, except bare Xbox 360 files (packages, Coalesced bundles,
+      // texture caches, movies), which go where the game keeps them (ue3/mod_extras.h)
+      const std::string key = ue3::ModGameKey(rel, bundle_rel);
+      if (key.empty()) continue;
+      const std::string ext = ModLower(rex::path_to_utf8(it->path().extension()));   // review r369 F5: string() throws on a name outside the code page
       if (ext == ".xex" || ext == ".xexp" || ext == ".dll" || ext == ".exe") {
         REXLOG_WARN("ue3_mods: {}: programs are not taken from mods - skipped", rex::path_to_utf8(it->path()));
         continue;
+      }
+      // A mod's own table of contents (<top folder>\*TOC*.txt, e.g. a fonts mod's whole WarGame\Xbox360TOC.txt) is not
+      // used: it was made from the modder's copy of the game (other title update / DLC / language files), and every other
+      // line in it would replace this game's. The game's own table is the base and InstallModOverlay rewrites the lines
+      // of the files the mods replace or add (size + MD5 from the mod's files), which is all a mod's table could change.
+      {
+        const size_t cut = key.find('\\');
+        const std::string leaf = cut == std::string::npos ? key : key.substr(cut + 1);
+        if (cut != std::string::npos && leaf.find('\\') == std::string::npos && leaf.find("toc") != std::string::npos &&
+            leaf.size() > 4 && leaf.compare(leaf.size() - 4, 4, ".txt") == 0) {
+          REXLOG_INFO("ue3_mods: {}: its own table of contents is not used - the game's is, with this mod's files' lines updated",
+                      rex::path_to_utf8(it->path()));
+          continue;
+        }
       }
       out[key] = it->path();
       ++n;
@@ -923,7 +1004,7 @@ void InstallModOverlay(rex::Runtime* runtime, std::map<std::string, std::filesys
           listed.insert(k);
           auto it = files.find(k);
           if (it != files.end()) {
-            line = std::to_string(fs::file_size(it->second, ec)) + " 0 " + sector + " " + path + " " + Md5Hex(it->second);
+            line = std::to_string(fs::file_size(it->second, ec)) + " " + std::to_string(ue3::WholeCompressedSize(it->second)) + " " + sector + " " + path + " " + Md5Hex(it->second);  // 0.6.5 (#367): its own uncompressed size
             ++changed;
           }
         }
@@ -934,7 +1015,8 @@ void InstallModOverlay(rex::Runtime* runtime, std::map<std::string, std::filesys
         std::string rel = rex::path_to_utf8(host.filename());
         std::string guest = "..\\" + rex::path_to_utf8(topdir.filename()) + "\\" + k.substr(top.size() + 1);
         guest = guest.substr(0, guest.size() - rel.size()) + rel;   // keep the mod file's own name casing
-        outText += std::to_string(fs::file_size(host, ec)) + " 0 0 " + guest + " " + Md5Hex(host) + "\r\n";
+        outText += std::to_string(fs::file_size(host, ec)) + " " + std::to_string(ue3::WholeCompressedSize(host)) + " 0 " + guest + " " +  // 0.6.5 (#367)
+                   Md5Hex(host) + "\r\n";
         ++changed;
       }
       if (!changed) continue;
@@ -984,6 +1066,10 @@ void Ue3InstallConfigEditsIfRequested(rex::Runtime* runtime) {
   std::map<std::string, fs::path> modDirs;
   std::map<std::string, fs::path> mods = CollectMods(&modDirs);
   AddVoiceLanguage(runtime->game_data_root(), &mods);  // GitHub #87
+  // the mods' config fragments, merged into the config bundles, join the mods' files; the config edits below then edit
+  // those merged copies
+  ue3::MergeModConfigFragments(runtime->game_data_root(), REXCVAR_GET(ue3_ini_bundle_dir),
+                               runtime->user_data_root() / "mod-config", mods);
   struct ModsAtEnd {
     rex::Runtime* rt; std::map<std::string, fs::path>* files; std::map<std::string, fs::path>* dirs;
     ~ModsAtEnd() {   // a destructor must not throw: a file-system error here would end the game at start-up

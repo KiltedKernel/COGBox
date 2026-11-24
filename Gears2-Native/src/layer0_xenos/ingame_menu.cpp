@@ -26,6 +26,8 @@
 #include <xenos/social_ingame.h>
 #include <xenos/social_page.h>
 #include <xenos/social_popup.h>
+#include <xenos/cheat_popup.h>   // GitHub #359
+#include <xenos/chat_panel.h>    // in-match chat
 #include <rex/kernel/xam/net/social_ui.h>   // social step 5: the game's own Invite button   // F-8: XenosAchievementSettingsMutex   // --cogbox_ui_lang: XenosTr
 #include <rex/cvar.h>
 #include <rex/filesystem.h>   // 0.4.9: rex::path_to_utf8
@@ -317,7 +319,7 @@ MenuFile LoadMenuFile(const std::string& path) {
     if (std::find(m.tabs.begin(), m.tabs.end(), o.tab) == m.tabs.end()) m.tabs.push_back(o.tab);
   // 0.4.9: a fixed tab order, whatever order the file lists them in (unknown tabs after these, in file order)
   {
-    static const char* const kOrder[] = {"Display", "Graphics", "Controls", "Gameplay", "Achievements"};
+    static const char* const kOrder[] = {"Display", "Graphics", "Controls", "Gameplay", "Audio", "Achievements"};   // GitHub #425: Audio
     auto rank = [](const std::string& t) {
       for (size_t i = 0; i < std::size(kOrder); ++i) if (t == kOrder[i]) return int(i);
       return int(std::size(kOrder));
@@ -1480,6 +1482,8 @@ void XenosInstallInGameMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDraw
     else if (!g_open.load()) OpenNow(MenuPage::kAchievements);
   });
   XenosInstallSocialPopup(drawer, window);   // social step 5
+  XenosInstallCheatPopup(drawer, window);    // GitHub #359: the cheat key notice
+  XenosInstallChatPanel(drawer, window);     // in-match chat (Y / U)
   // Social step 5: F8 opens the menu on its Social page (and closes it again), when the game runs online.
   rex::kernel::xam::net::SetFriendsUiHandler([] { OpenSocialOnUIThread(); });   // the game's own Invite button
   rex::ui::RegisterBind("bind_cogbox_social", "F8", "COGBox social (friends, invites)", [] { ToggleSocial(); });
@@ -1504,6 +1508,8 @@ void XenosShutdownInGameMenu() {
   g_stop.store(true);
   if (g_poller.joinable()) g_poller.join();
   XenosShutdownSocialPopup();   // social step 5 (after the pad thread that feeds it)
+  XenosShutdownCheatPopup();    // GitHub #359
+  XenosShutdownChatPanel();
   g_menu.reset();
   if (g_open.load()) RestoreMouseState();   // PR #134
   g_unblock_pending.store(false);

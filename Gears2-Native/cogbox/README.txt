@@ -2,7 +2,7 @@ COGBox - Gears of War native PC ports
 =====================================
 
 COGBox starts the native PC ports of Gears of War, Gears of War 2, Gears of War 3 and Gears of War:
-Judgment. This README is for COGBox 0.6.4.
+Judgment. This README is for COGBox 0.6.7.
 These are fan-made ports, rebuilt from the Xbox 360 games' own code by static recompilation. This
 is an unofficial fan project. COGBox isn't affiliated with Microsoft, Epic Games or The
 Coalition.
@@ -34,7 +34,7 @@ What you need
 
 Getting started
 ---------------
-1. Right-click COGBox-0.6.4.7z > Extract All... (Windows 11; on Windows 10 use 7-Zip, free from
+1. Right-click COGBox-0.6.7.7z > Extract All... (Windows 11; on Windows 10 use 7-Zip, free from
    7-zip.org) to a folder of its own that you can write to, for example C:\Games\COGBox. Don't start
    COGBox from inside the archive, and don't use Program Files (Windows protects it) - COGBox tells
    you on start-up if it's in such a place.
@@ -65,6 +65,64 @@ Restart to apply and Quit game. Most settings take effect when the game restarts
 apply does that for you.
 Alt+Enter in the game window switches between windowed and borderless full screen (all four games; another key:
 --bind_cogbox_fullscreen=<key> in extra-args.txt, None = off).
+
+
+New in 0.6.7
+------------
+- Gears 3: fixed a crash when entering a game while playing online (two parts of the game read the same list at
+  once).
+- Gears 3 and Judgment at the 1080p render resolution: menus are the right size and in the right place again
+  (they were drawn at 720p size, squeezed into the top of the screen).
+- Black screen with sound when COGBox is in a folder whose name has letters outside your Windows language (for
+  example Cyrillic): fixed in all four games.
+- Gears of War at the 1080p render resolution: its menus fill the screen too (#408).
+- Gears 3: fixed a rare crash about 20 seconds after starting the game.
+- Ambient occlusion: "Off" is back in the list (#406). "On" is drawn at full size when the game draws 720p or 1080p.
+- DLSS / FSR "Performance" now really upscales at the 4K render resolution (1920x1080 to 3840x2160).
+- Hungarian translation updated.
+- Known: Gears of War on a 16:10 screen - the logo films are still flattened (#407).
+- Known: Judgment - the loading screen after Monroe Commons (Sofia's testimony) can stay up for ever with a
+  frame-rate limit above 30 (#405). Set the limit to 30 before you finish that section, then set it back.
+
+
+New in 0.6.6
+------------
+- FASTER DRAWING IN ALL FOUR GAMES: the renderer's speed work (pixel shaders without an unused alpha test, less
+  per-texture work, cheaper vertex and front-buffer copies) is now on for everyone. Measured on one PC (1440p,
+  DirectX 12): Gears 2 37 % faster, Gears 3 21 %, Judgment 22 %, Gears of War 10 % (details in CHANGES.md).
+- Upscalers at 32:9 and wider: FSR / DLSS / SMAA T2x now start (they never started on a 32:9 screen with Ultrawide on).
+- TRUE 1080p: the 1080p render resolution now has the game draw 1920x1080 itself (it was 720p upscaled). Also
+  with Ultrawide in Gears 2 and Gears 3; Judgment and Gears of War with Ultrawide still upscale.
+- Ambient occlusion is one switch, Default or On. On is the modern version at half resolution: about half the cost
+  it had, with a picture that is hard to tell apart.
+- DLSS: a lighter model on RTX 20 / 30 cards for Performance and Ultra Performance.
+- Gears 1: "Skip the intro logos" now skips the Epic logo too.
+- Gears 2: pre-rendered films follow the Voice language.
+- Judgment: ultrawide menus and pages are sized to the picture.
+- Frame generation is not offered on graphics with under 3.5 GB of their own memory (it could not keep up there).
+- Screenshots work when the Pictures folder has letters outside your Windows language.
+- System Link is no longer labelled experimental.
+- Name tags show as plain Name#1234 in every game (thanks Flippage).
+- Removed: Intel XeSS and XeSS frame generation (a saved XeSS choice becomes SMAA, a saved XeSS frame generation
+  becomes AMD FSR frame generation), the second ambient-occlusion method (CACAO), the "Match my monitor" render
+  resolution (a saved one becomes the nearest whole-number scale) and the "Game version" choice (title updates
+  have been required since 0.4.0).
+- Hungarian translation update (thanks hevesij).
+
+
+New in 0.6.5
+------------
+- SHADERS, MUCH FASTER: on every start after the first, Gears 3's shader warm-up drops from 8.5 s to 0.2 s
+  (DirectX 12) and the game reaches gameplay 66% sooner. Converted shaders are kept between starts (Vulkan too:
+  9.4 s -> 1.9 s), first-ever starts translate shaders 56% faster with 67% fewer stutters, and a new graphics
+  driver no longer means long freezes (Play now offers Prepare all shaders first).
+- Cheats chosen in the launcher (Gameplay tab): God mode, Game speed, All weapons and ammo, Hide the HUD.
+- Gears 1: 16:10. Left and right stick dead zones. HDR for Judgment and Gears 1 (by legoliamneeson).
+- The FABRICATOR is a local mod manager (by KiltedKernel). Recent players and COGBox tags on players' names online.
+- Linux / Steam Deck players can be joined online again; Judgment voice language works (#367).
+- Thanks to Flippage, KiltedKernel and legoliamneeson for their code, and to everyone who reported issues on GitHub
+  and tested in the Discord.
+- Full list: CHANGES.md on GitHub (https://github.com/Shagg88/COGBox).
 
 
 New in 0.6.4
@@ -102,7 +160,7 @@ New in 0.6.2
 - DualSense adaptive triggers in all four games (Controls tab, experimental, off by default, #245).
   Not tried on a real DualSense yet - please tell us how it feels.
 - Indirect lighting (SSIL, experimental, by gmihaic): Graphics tab, below Ambient occlusion. Light
-  bounced from nearby lit surfaces. Needs Ambient occlusion: XeGTAO (high or ultra); off by default.
+  bounced from nearby lit surfaces. Needs Ambient occlusion: On; off by default.
 - Soft shadows (PCSS) in Judgment too, and PCSS fixes (by gmihaic).
 - Better HDR in Gears 2 and Gears 3 (by legoliamneeson), and an HDR highlights setting (Display
   tab).
@@ -189,7 +247,7 @@ New in 0.4.7
   #202, #213, #131). The GPU copies the games use to move textures in memory were being skipped on Vulkan.
   Vulkan is no longer marked experimental in Gears 3 and Judgment.
 - Gears 3: Exit Game on the main menu works after you have played and gone back to the menu (#215).
-- DLSS / FSR / XeSS in Gears 3 and Judgment: characters and other moving objects get their own motion vectors, so
+- DLSS / FSR in Gears 3 and Judgment: characters and other moving objects get their own motion vectors, so
   they no longer smear or flicker (#150, #147). Gears 1 keeps DLSS experimental (its characters still flicker with
   DLSS; SMAA is clean).
 - DLSS is no longer marked highly experimental in Gears 2, Gears 3 and Judgment (still is in Gears 1).
@@ -219,7 +277,7 @@ New in 0.4.6
   PlayStation style, colour, position, sound), an Achievements page in the in-game menu (F7) and an ACHIEVEMENTS tab
   in the launcher.
 - Ambient occlusion: AMD FidelityFX CACAO as a cheaper choice next to XeGTAO, and XeGTAO / CACAO in Judgment,
-  which also fixes its shadow flicker with DLSS; DLSS / FSR / XeSS get sharper textures when they draw the scene
+  which also fixes its shadow flicker with DLSS; DLSS / FSR get sharper textures when they draw the scene
   below the output size, and Judgment's DLSS takes the finished picture with real depth (thanks to gmihaic,
   PR #204).
 - COGBox's own text in the game (the in-game menu, the Achievements page, popups, shader notes) is in the
@@ -263,7 +321,7 @@ New in 0.4.6
 - Judgment: after a loading screen the 30 fps loading limit ends sooner (3 s after loading instead of 6, at most
   8 s while the level streams in instead of 20).
 - XeGTAO High uses two smoothing passes instead of three (a little faster, slightly less smooth); Ultra chooses its
-  passes by itself (two without DLSS / FSR / XeSS, fewer the lower DLSS / FSR / XeSS draws the scene).
+  passes by itself (two without DLSS / FSR, fewer the lower DLSS / FSR draws the scene).
 - Language: packages stored compressed as a whole are now read when switching the voice language.
 - Gears 1 launcher: says when the chosen Scene resolution can't be used at the render scale (#98).
 - New logs and test switches for reported issues (#90, #105, #131, #132, #185, #193, #202), all off unless asked for.
@@ -286,7 +344,7 @@ New in 0.4.5
 - Smoother frame rate: the picture is presented from the window's own thread, in all four games.
 - Launcher: an EXIT button, it comes back to the front when a game closes, a "COGBox updated" note with a link to
   the changelog, the same Graphics and Display options in all four games (ones a game can't do yet are greyed with
-  the reason), and Real occlusion is set for you per game. With DLSS / FSR / XeSS at full scene size, the log says it
+  the reason), and Real occlusion is set for you per game. With DLSS / FSR at full scene size, the log says it
   is anti-aliasing only (DLSS runs as DLAA), with no extra frames (#98).
 
 New in 0.4.4
@@ -319,7 +377,7 @@ New in 0.4.2
   shadows. Default: Game's own. Thanks to gmihaic (GitHub PR #139).
 - Anti-aliasing: SMAA T2x (Gears 2 / Gears 3) - smoother edges and much less shimmer, DirectX 12 and Vulkan
   (PR #139).
-- DLSS / FSR / XeSS: better motion vectors and depth in Gears 2 and Gears 3 (PR #139).
+- DLSS / FSR: better motion vectors and depth in Gears 2 and Gears 3 (PR #139).
 - About tab: "Report a problem" makes the report zip, opens a new ticket page (since 0.5.0: GitLab, details on the clipboard) and shows the zip to
   drag into it.
 - Untested game versions or title updates still play, with a clearer warning; please don't report problems
@@ -358,7 +416,7 @@ New in 0.4.0 - please read
 
 
 Graphics API: DirectX 12 is the default. Vulkan is on each
-game's Graphics tab for testing; FSR / DLSS / XeSS and DLSS frame generation are DirectX 12 only;
+game's Graphics tab for testing; FSR / DLSS and DLSS frame generation are DirectX 12 only;
 AMD FSR frame generation also works on Vulkan (experimental). If something looks wrong on Vulkan,
 please send a problem report.
 
@@ -373,8 +431,8 @@ Keyboard and mouse: every key can be changed on a game's Controls tab.
 DLC and mods: a game's About tab (Downloadable content, Mods).
 
 
-System Link - LAN play (experimental; Title Update versions of all four games)
--------------------------------------------------------------------------------
+System Link - LAN play (Title Update versions of all four games)
+-----------------------------------------------------------------
 Play the games' System Link modes (co-op and the other System Link modes) with other PCs - in the
 same house, or over the internet with a free "LAN VPN". Thanks to HubertFer, whose patch made this
 possible. Tested so far: Gears of War 2 campaign co-op, and Gears of War co-op (two PCs, about an
@@ -508,7 +566,7 @@ COGBox and the ports' own code are under the MIT licence (LICENSE.txt). The libr
 vendor upscalers included (SDL3, Dear ImGui, miniz, stb, PsychoV35 and RenoDX's HDR grading (MIT, in the Gears 2 and Gears 3
 licenses folders), FFmpeg's XMA decoder (LGPL 2.1+, licenses\FFmpeg-NOTICE.txt), the
 rexglue SDK and Xenia code (BSD-3, licenses\Xenia-LICENSE.txt), modcore (MIT), AMD FidelityFX and Anti-Lag 2, NVIDIA DLSS,
-DLSS Frame Generation, Streamline and Reflex, Intel XeSS, XeSS Frame Generation and XeLL, the DirectX 12 Agility SDK and
+DLSS Frame Generation, Streamline and Reflex, the DirectX 12 Agility SDK and
 the DirectX Shader Compiler (licenses\Microsoft-DirectX-redist-NOTICE.txt)) come under their own terms, in the licenses
 folder (NVIDIA's: licenses\NVIDIA-Streamline-DLSS-G-NOTICE.txt). The vendor and Microsoft files are not under COGBox's
 MIT licence. This product uses the NVIDIA DLSS SDK, the NVIDIA

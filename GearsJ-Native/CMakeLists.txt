@@ -33,7 +33,7 @@ include(cmake/rexglue.cmake)
 # Layer 0: Xbox 360 GPU core and game-free developer tooling (the shared copy in Gears2-Native).
 file(GLOB GN_LAYER0_SOURCES CONFIGURE_DEPENDS ${GN_LAYER0_DIR}/*.cpp ${GN_LAYER0_DIR}/renderer/*.cpp ${GN_LAYER0_DIR}/input/*.cpp)
 # The vendor-SDK wrappers are added below only when their SDK is there (job 052).
-list(FILTER GN_LAYER0_SOURCES EXCLUDE REGEX "(dlss|fsr|xess)_upscaler\\.cpp$")
+list(FILTER GN_LAYER0_SOURCES EXCLUDE REGEX "(dlss|fsr)_upscaler\\.cpp$")
 add_library(gn_layer0_xenos STATIC ${GN_LAYER0_SOURCES})
 target_include_directories(gn_layer0_xenos PUBLIC ${GN_LAYER0_DIR}/include)
 include(${GN_LAYER0_HOME}/cmake/spirv_opt.cmake)  # 0.6.1: SPIRV-Tools' optimiser for the Vulkan shader path
@@ -41,7 +41,7 @@ gn_add_spirv_opt(gn_layer0_xenos ${GN_THIRD_PARTY})
 target_include_directories(gn_layer0_xenos PRIVATE ${GN_THIRD_PARTY}/flip/src/cpp/tool)
 target_link_libraries(gn_layer0_xenos PUBLIC rex::runtime)
 set(GN_DEPS_THIRD_PARTY ${GN_THIRD_PARTY})
-include(${GN_LAYER0_HOME}/cmake/gn_deps.cmake)   # GN_DXC_DIR, GN_AGILITY_DIR, GN_XESS_DIR (0.4.9)
+include(${GN_LAYER0_HOME}/cmake/gn_deps.cmake)   # GN_DXC_DIR, GN_AGILITY_DIR (0.4.9)
 target_include_directories(gn_layer0_xenos PRIVATE ${GN_DXC_DIR}/inc)
 # Vulkan (Gears 2 notes/68, its CMakeLists.txt; job 018: without these headers vulkan_backend.cpp builds its null stub
 # and --gow2_renderer_api=vulkan silently stays on D3D12). Header-only; the loader is opened at run time. Newest
@@ -89,11 +89,13 @@ target_sources(gn_layer2_ue3 PRIVATE ${GN_LAYER0_HOME}/src/layer2_ue3/shader_pre
     ${GN_LAYER0_HOME}/src/layer2_ue3/main_menu_exit.cpp
     ${GN_LAYER0_HOME}/src/layer2_ue3/console.cpp  # GitHub #264: engine console commands (shared with Gears 2 / 3)
     ${GN_LAYER0_HOME}/src/layer2_ue3/objects.cpp  # GitHub #245: Gears 2's ue3::obj reflection (Judgment has no other)
-    ${GN_LAYER0_HOME}/src/layer2_ue3/name_tags.cpp)  # GitHub #353: COGBox tags after the players' names
+    ${GN_LAYER0_HOME}/src/layer2_ue3/name_tags.cpp  # GitHub #353: COGBox tags after the players' names
+    ${GN_LAYER0_HOME}/src/layer2_ue3/chat.cpp)  # in-match chat
 set_source_files_properties(${GN_LAYER0_HOME}/src/layer2_ue3/shader_prebuild.cpp
     ${GN_LAYER0_HOME}/src/layer2_ue3/prebuild_lzx.cpp ${GN_LAYER0_HOME}/src/layer2_ue3/package_exports.cpp
     ${GN_LAYER0_HOME}/src/layer2_ue3/main_menu_exit.cpp ${GN_LAYER0_HOME}/src/layer2_ue3/console.cpp
-    ${GN_LAYER0_HOME}/src/layer2_ue3/objects.cpp ${GN_LAYER0_HOME}/src/layer2_ue3/name_tags.cpp PROPERTIES
+    ${GN_LAYER0_HOME}/src/layer2_ue3/objects.cpp ${GN_LAYER0_HOME}/src/layer2_ue3/name_tags.cpp
+    ${GN_LAYER0_HOME}/src/layer2_ue3/chat.cpp PROPERTIES
     INCLUDE_DIRECTORIES ${GN_LAYER0_HOME}/src/layer2_ue3/include)
 # its options are saved under Judgment's settings group
 set_source_files_properties(${GN_LAYER0_HOME}/src/layer2_ue3/console.cpp PROPERTIES COMPILE_DEFINITIONS GN_UE3_CONSOLE_JUDGMENT=1)
@@ -112,10 +114,13 @@ set(GOWJ_SOURCES
 )
 # ue3/objects.h is Gears 2's (its objects.cpp is built in layer 2 above); only these files get that folder, so this
 # game's own ue3/ headers are not shadowed.
-set_source_files_properties(src/layer3_gowj/adaptive_triggers.cpp src/layer3_gowj/first_person.cpp src/layer3_gowj/cheats.cpp PROPERTIES
+set_source_files_properties(src/layer3_gowj/adaptive_triggers.cpp src/layer3_gowj/first_person.cpp src/layer3_gowj/cheats.cpp
+    src/layer3_gowj/game_patches.cpp PROPERTIES  # 0.6.6: game_patches.cpp uses ue3::obj too (true-1080p menus)
     INCLUDE_DIRECTORIES ${GN_LAYER0_HOME}/src/layer2_ue3/include)
 if(WIN32)
-    add_executable(gowj WIN32 ${GOWJ_SOURCES})
+    # GitHub #355: the game's own window / taskbar icon (res/gowj.rc; SDL takes the exe's first icon)
+    enable_language(RC)
+    add_executable(gowj WIN32 ${GOWJ_SOURCES} res/gowj.rc)
 else()
     add_executable(gowj ${GOWJ_SOURCES})
 endif()
@@ -142,8 +147,8 @@ add_custom_command(TARGET gowj POST_BUILD
         ${GN_G2_DIR}/assets/glyphs $<TARGET_FILE_DIR:gowj>/assets/glyphs
     COMMENT "Copying dxcompiler.dll, dxil.dll, and assets/glyphs next to gowj.exe")
 
-# Upscalers (job 052, from Gears 2 notes/64 and notes/65): DLSS, FSR and XeSS are built in when their SDKs are in
-# Gears 2's third_party folder (read-only, never committed). GN_WITH_DLSS / GN_WITH_FSR / GN_WITH_XESS switch one off.
+# Upscalers (job 052, from Gears 2 notes/64 and notes/65): DLSS and FSR are built in when their SDKs are in
+# Gears 2's third_party folder (read-only, never committed). GN_WITH_DLSS / GN_WITH_FSR switch one off.
 set(GN_DLSS_DIR ${GN_THIRD_PARTY}/dlss-sdk)
 set(GN_FFX_DIR ${GN_THIRD_PARTY}/fidelityfx-sdk/Kits/FidelityFX CACHE PATH "AMD FSR SDK Kits/FidelityFX folder (fsr049: -DGN_FFX_DIR=... builds against another copy)")
 set(GN_DLSS_FOUND OFF)
@@ -154,14 +159,9 @@ set(GN_FFX_FOUND OFF)
 if(WIN32 AND EXISTS ${GN_FFX_DIR}/api/include/ffx_api.h AND EXISTS ${GN_FFX_DIR}/signedbin/amd_fidelityfx_loader_dx12.dll)
     set(GN_FFX_FOUND ON)
 endif()
-set(GN_XESS_FOUND OFF)
-if(WIN32 AND EXISTS ${GN_XESS_DIR}/inc/xess/xess_d3d12.h AND EXISTS ${GN_XESS_DIR}/bin/libxess.dll)
-    set(GN_XESS_FOUND ON)
-endif()
 option(GN_WITH_DLSS "Build NVIDIA DLSS in (needs Gears 2's third_party/dlss-sdk)" ${GN_DLSS_FOUND})
 option(GN_WITH_FSR "Build AMD FSR in (needs Gears 2's third_party/fidelityfx-sdk)" ${GN_FFX_FOUND})
-option(GN_WITH_XESS "Build Intel XeSS in (needs Gears 2's third_party/xess-sdk)" ${GN_XESS_FOUND})
-message(STATUS "GearsJ-Native: upscalers - DLSS ${GN_WITH_DLSS} (SDK found: ${GN_DLSS_FOUND}), FSR ${GN_WITH_FSR} (SDK found: ${GN_FFX_FOUND}), XeSS ${GN_WITH_XESS} (SDK found: ${GN_XESS_FOUND})")
+message(STATUS "GearsJ-Native: upscalers - DLSS ${GN_WITH_DLSS} (SDK found: ${GN_DLSS_FOUND}), FSR ${GN_WITH_FSR} (SDK found: ${GN_FFX_FOUND})")
 if(GN_WITH_DLSS AND GN_DLSS_FOUND)
     target_sources(gn_layer0_xenos PRIVATE ${GN_LAYER0_DIR}/renderer/dlss_upscaler.cpp)
     target_compile_definitions(gn_layer0_xenos PRIVATE GN_HAVE_DLSS)
@@ -204,15 +204,6 @@ if(GN_WITH_FSR AND GN_FFX_FOUND)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GN_FFX_DIR}/signedbin/amd_fidelityfx_framegeneration_dx12.dll $<TARGET_FILE_DIR:gowj>
             COMMENT "Copying the FidelityFX frame generation DLL next to gowj.exe")
     endif()
-endif()
-if(GN_WITH_XESS AND GN_XESS_FOUND)
-    target_sources(gn_layer0_xenos PRIVATE ${GN_LAYER0_DIR}/renderer/xess_upscaler.cpp)
-    target_compile_definitions(gn_layer0_xenos PRIVATE GN_HAVE_XESS)
-    target_include_directories(gn_layer0_xenos PRIVATE ${GN_XESS_DIR}/inc)
-    # No import library: xess_upscaler.cpp loads libxess.dll when XeSS is chosen, so the exe starts without it.
-    add_custom_command(TARGET gowj POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GN_XESS_DIR}/bin/libxess.dll $<TARGET_FILE_DIR:gowj>
-        COMMENT "Copying libxess.dll next to gowj.exe")
 endif()
 # Low-latency modes (Gears 2 patches 0135/0136, job 447b 780257d), the same blocks as Gears 2's CMakeLists pointing at
 # its third_party (read-only): NVIDIA Reflex through NVAPI, AMD Anti-Lag 2 (header-only). latency_reflex.cpp comes in
@@ -367,3 +358,9 @@ if(GN_BUILD_TESTS)
 endif()
 
 # (Gears 3 also builds gn_census / gn_hlsl_check from its tools folder; not copied yet.)
+
+# 0.6.6: Intel's upscaler DLLs are no longer built in or shipped. A build folder made before that still holds the
+# copies an older build put there; the packager refuses a folder that has them, so every build removes them.
+add_custom_command(TARGET gowj POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE_DIR:gowj>/libxess.dll $<TARGET_FILE_DIR:gowj>/libxess_fg.dll $<TARGET_FILE_DIR:gowj>/libxell.dll
+    COMMENT "Removing leftover Intel upscaler DLLs from the build folder")

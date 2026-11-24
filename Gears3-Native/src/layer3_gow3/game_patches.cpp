@@ -24,6 +24,7 @@
 #include <ue3/script_input.h>
 #include <ue3/console.h>  // Ue3ConsoleQueue (GitHub #208)
 #include <ue3/name_tags.h>
+#include <ue3/native_viewport.h>  // 0.6.6 true 1080p menus
 #include <iterator>   // std::size  // GitHub #353
 #include "mouse_look.h"
 #include "main_menu_exit.h"
@@ -39,6 +40,7 @@
 #include <filesystem>
 #include <string_view>
 #include <format>
+#include <mutex>   // 0.6.7: the file-handle map lock
 #include <string>
 #include <cstdio>
 #include <thread>
@@ -213,10 +215,81 @@ bool Gow3VoiceCallbackGone(PPCRegister& r3) {
   return true;
 }
 bool Gow3UltrawideNoConstrain() { return Wide(); }  // jump_address_on_true: the beq at 0x8261BE60 is taken
+
+// ---- Experiment (Shagg, 20 Nov): true 1080p, as Gears 2's --gow2_native_lines ---------------------------------------
+// The same function as Gears 2's sub_82816638 (TU6 sub_82971BC0): it makes the screen height 720 (`li r11,720`, the
+// Gow3UltrawideSceneHeight site) and the width aspect x 720 clamped to 900..1280 - stored at 0x82971C80
+// (`stw r11,...(r10)`, below 1280) or, after `li r11,1280` at 0x82971F3C, at the next instruction. --gow3_native_lines=1080 gives both numbers: 1920x1080. Needs
+// --gow2_renderer_edram_extended=true (10 MiB of EDRAM cannot hold 1080p). Not with a wider picture shape
+// (--gow3_ultrawide / --gow3_aspect). NOT RUN YET: written from the generated code, to be proven by a gameplay run.
+REXCVAR_DEFINE_INT32(gow3_native_lines, 0, "Gears3",
+                     "Experiment (true 1080p): the game's own screen height in lines, 0 = 720 as on the console. 1080 "
+                     "makes the game draw 1920x1080 itself (width = lines x 16 / 9, a multiple of 8). Needs "
+                     "--gow2_renderer_edram_extended=true. With --gow3_ultrawide / --gow3_aspect the wide picture is "
+                     "scaled the same way")
+    .range(0, 1440);
+namespace {
+uint32_t Gow3NativeLines() {
+  static const uint32_t lines = [] {
+    const int v = REXCVAR_GET(gow3_native_lines);
+    if (v <= 720) return 0u;   // 0.6.6: also with a wider picture shape (its height is scaled by lines / 720)
+    return uint32_t(v + 7) / 8u * 8u;
+  }();
+  return lines;
+}
+// The game's own width times lines / 720 (a multiple of 8): the 16:10 and 4:3 video modes keep their shape.
+uint32_t Gow3NativeWidth(uint32_t game_width) { return (game_width * Gow3NativeLines() / 720u + 7u) / 8u * 8u; }
+}  // namespace
+void Gow3NativeSceneWidth(PPCRegister& r11) {  // before the width's store (below 1280)
+  if (!Gow3NativeLines()) return;
+  const uint32_t width = Gow3NativeWidth(r11.u32);
+  GOW3_LOG_ONCE("gow3_native_lines: screen width {} -> {}", r11.u32, width);
+  r11.u64 = width;
+}
+void Gow3NativeSceneWidthMax(PPCRegister& r11) { Gow3NativeSceneWidth(r11); }  // after `li r11,1280` (one name per hook)
+
 void Gow3UltrawideSceneHeight(PPCRegister& r11) {  // after `li r11,720` at 0x82960C78
+  if (Gow3NativeLines()) {
+    const uint32_t rows = Wide() ? (WideHeight() * Gow3NativeLines() / 720u + 1u) & ~1u : Gow3NativeLines();
+    GOW3_LOG_ONCE("gow3_native_lines: screen height {} -> {}{}", r11.u32, rows, Wide() ? " (wide shape)" : "");
+    r11.u64 = rows;
+    return;
+  }
   if (!Wide()) return;
   GOW3_LOG_ONCE("gow3_aspect: scene buffer height {} -> {}", r11.u32, WideHeight());
   r11.u64 = WideHeight();
+}
+// 0.6.6 (job 2189: at true 1080p the menus sat in the top-left 1280x720 of the 1920x1080 picture): the game's FViewport
+// still reports the console's 1280x720 (ue3/native_viewport.h has the why and the checks). Gears 3's menus are Scaleform
+// movies whose viewport the GFx engine takes from that FViewport: TU6 sub_829343E0 (one movie) and sub_82934188 (every
+// movie) start from `li r30,1280` / `li r9,720`, then `lwz r11,72(r3)` (the engine's Viewport), `lwz r10,8(r11)` /
+// `bctrl` (GetSizeX) and `lwz r7,12(r8)` / `bctrl` (GetSizeY), and hand the size to the movie (vtable +100,
+// SetViewport; sub_82931728 does the same). UGameViewportClient::GetViewportSize (TU6 sub_826266B8: `lwz r11,68(r3)`,
+// the same two slots) and its script native (sub_8252C2A0) ask the same object. The object: GEngine -> GameViewport
+// (+1196: `lwz r3,1196(r11)` after GEngine in sub_828F4B98 and seven more callers of sub_826266B8) -> Viewport (+68).
+// Once per engine tick until on (checked every 30 ticks); then the object is followed in case it is made again.
+void Gow3NativeUiViewportTick() {
+  namespace nv = ue3::native_viewport;
+  if (!Gow3NativeLines()) return;
+  static uint32_t ticks = 0;
+  static int fails = 0;
+  if (++ticks % 30 || fails > 20) return;
+  const uint32_t engine = ue3::obj::Read32(gow3::addr::kGEngine);
+  const uint32_t client = engine ? ue3::obj::Read32(engine + 1196u) : 0;
+  const uint32_t viewport = client ? ue3::obj::Read32(client + 68u) : 0;
+  if (!viewport) return;
+  if (nv::g_installed.load(std::memory_order_relaxed)) {
+    nv::NoteViewport(viewport);
+    return;
+  }
+  const nv::Result r = nv::Install(viewport, Gow3NativeLines());
+  if (r.ok) {
+    REXLOG_INFO("gow3_native_lines: UI scene viewport {}x{} -> {}x{} (the game's FViewport 0x{:08X}: GetSizeX / GetSizeY "
+                "0x{:08X} / 0x{:08X}, vtable slots {} / {}) - menus and Scaleform movies lay out in the larger screen",
+                r.w0, r.h0, r.w1, r.h1, viewport, r.fn_x, r.fn_y, r.slot, r.slot + 1);
+  } else if (++fails > 20) {
+    REXLOG_WARN("gow3_native_lines: the menus stay laid out in 1280x720 - {}", r.why);
+  }
 }
 // After `lwz r30,0x242c(r9)` at 0x827C583C (TU6 `lwz r30,0x2bd8(r9)` at 0x827D7ACC), in the scene render targets'
 // sizing (TU6 sub_827D7AA8, UE3 FSceneRenderTargets::Allocate on Xbox): r29 / r30 = the screen width / height globals,
@@ -263,12 +336,124 @@ void Gow3UltrawideSharedMemory(PPCRegister& r5) {
                 "there; GitHub #330)", r5.u32, kStock720);
   r5.u64 = kStock720;
 }
+// 0.6.7 (Shagg's 0.6.6 report, 21 Nov: Gears 3 at true 1080p, main menu squeezed into the top ~42% and drawn at 720p
+// size; job 2200's A-1080p-Gears3 pause menu had the same 720p-sized text and a 1280x720 backdrop box in the centre,
+// while U-1080uw-Gears3 - true 1080p WITH this skip, through Wide() - was scaled right). The store below is the
+// Scaleform movies' scale mode (SetViewScaleMode, see GitHub #396 below). The game's own mode draws a movie's
+// 1280x720 stage at 1:1 and lets its script place things against the viewport's edges: at 720 lines the viewport IS
+// the stage, so any mode looks the same; at 1080 lines (FViewport 1920x1080, logged "UI scene viewport 1920x1080 ->
+// 1920x1080") every menu keeps 720p pixel sizes and the scripts' anchoring moves the pieces (the main menu ~180 rows
+// up). With the store skipped the movie keeps show-all, as under Ultrawide (the Canary patch): a full-screen 16:9
+// viewport shows the stage scaled by exactly lines / 720 - the console's layout, larger. Split-screen / non-16:9
+// viewports: show-all as under Ultrawide (not checked at 1080 lines).
+REXCVAR_DEFINE_BOOL(gow3_native_ui_show_all, true, "Gears3",
+                    "With --gow3_native_lines: Scaleform menus keep the show-all scale mode, so the console's 1280x720 "
+                    "layout is scaled to the larger screen (false = the 0.6.6 behaviour: drawn at 720p size)");
 bool Gow3UltrawideVideo(PPCRegister& r4) {  // jump_address_on_true: past `stw r4,0x88(r3)` at 0x82BC9D84
-  if (!Wide()) return false;
+  if (!Wide()) {
+    if (!Gow3NativeLines() || !REXCVAR_GET(gow3_native_ui_show_all)) return false;
+    GOW3_LOG_ONCE("gow3_native_lines: Scaleform scale mode {} not stored - menus keep show-all (scaled x{:.2f})",
+                  r4.u32, double(Gow3NativeLines()) / 720.0);
+    r4.u64 = 1;
+    return true;
+  }
   GOW3_LOG_ONCE("gow3_aspect: 0x82BC9D84 store of {} skipped", r4.u32);
   r4.u64 = 1;  // as Canary's `li r4,1` in place of the store
   return true;
 }
+
+// GitHub #396 (Gears 3 part, 3440x1440): with a wider picture the menus showed other menus' pieces and stray art in the
+// strips left and right of the 16:9 centre (the lobby's party list beside the Stats & Awards and Options panels, the
+// title's background art ending short of the edges). The store skipped above is the Scaleform movie's scale mode
+// (TU6 sub_82BDD3B8 = SetViewScaleMode: `stw r4,136(r3)`, then the movie's SetViewport, vtable +100, with the viewport
+// kept at +64 - Judgment's 0x82CBA684 is the same function, "Scaleform's scale mode" there); Canary's 1 = show all:
+// each movie's 16:9 stage sits in the centre of a full-width viewport, and whatever a movie places off its stage
+// (art made wider than 16:9, a panel under a modal one) is drawn into the strips too, where at 16:9 it falls off the
+// screen. Every movie's viewport is set through TU6 sub_82929C38 (GViewport on the stack: BufferWidth/Height, Left,
+// Top, Width, Height = r4..r9, the scissor zeroed, flags r10; then vtable +100): from sub_829343E0 (one movie;
+// sub_82934188 runs it for every movie, also after sub_82931728 sets a new FViewport) and sub_82932C28 [read in
+// gow3_recomp.129 / .74 / .181 / .52]. A full-screen viewport wider than 16:9 becomes the 16:9 box in its centre:
+// the layout is the same (show all in a 16:9 box = the stage exactly) and D3D's viewport clips the rest, so nothing
+// off-stage reaches the strips [the clip: D3D9 / Xenos viewport behaviour, not seen in the game's renderer]. The
+// strips keep what is under the menus (the 3D scene in game, black or the clear colour in the front end).
+// --gow3_ultrawide_ui_full_width brings the old full-width viewport back.
+REXCVAR_DEFINE_BOOL(gow3_ultrawide_ui_full_width, false, "Gears3",
+                    "With --gow3_ultrawide / --gow3_aspect: Scaleform menus get the whole wide picture as their viewport, "
+                    "as before 0.6.6 (GitHub #396: other menus' pieces show in the strips beside the 16:9 centre). "
+                    "Off = each full-screen menu is drawn in a 16:9 box in the centre");
+#if defined(GOW3_TU6) && GOW3_TU6
+extern "C" void __imp__sub_82929C38(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_82929C38(PPCContext& __restrict ctx, uint8_t* base) {
+  if (Wide() && !REXCVAR_GET(gow3_ultrawide_ui_full_width)) {
+    const uint32_t bw = ctx.r4.u32, bh = ctx.r5.u32, l = ctx.r6.u32, t = ctx.r7.u32, w = ctx.r8.u32, h = ctx.r9.u32;
+    // only a viewport covering the whole buffer (split-screen and render-to-texture movies are left alone), and only
+    // when it is wider than 16:9 by more than a rounding step
+    if (l == 0 && t == 0 && w == bw && h == bh && h > 0 && uint64_t(w) * 9u > uint64_t(h) * 16u + 9u) {
+      const uint32_t w169 = (h * 16u / 9u + 1u) & ~1u;
+      const uint32_t left = (w - w169) / 2u;
+      static std::atomic<int> told{0};
+      if (told.fetch_add(1) < 4)
+        REXLOG_INFO("gow3_aspect: Scaleform movie viewport {}x{} -> {}x{} from x {} (GitHub #396; flags 0x{:X})", w, h,
+                    w169, h, left, ctx.r10.u32);
+      ctx.r6.u64 = left;
+      ctx.r8.u64 = w169;
+    }
+  }
+  __imp__sub_82929C38(ctx, base);
+}
+#endif
+
+// ---- Start-up crash "read of guest 0x4A9E7324" (jobs 1925 / 2253b: 1 in 7 to 1 in 44 Gears 3 starts) ----------------
+// The async file system (UE3 FAsyncIOSystemBase, TU6) keeps a name -> file-handle map (NameToHandleMap, a
+// TMap<FString, handle> at this+12, 32-byte pairs). Read in gow3_recomp (TU6):
+//   - sub_822C86D8 (GetCachedFileHandle): looks a name up (sub_822C8810 -> sub_822BD110, the map's Find) and, when it
+//     is not there, opens the file (vtable +52) and ADDS it (sub_822CB058, the map's Set - its only caller). Called
+//     only from the file thread's loop sub_822C8E50, outside the request lock (that lock, [this+8]+4, guards the
+//     request arrays only).
+//   - sub_822CB1A8: the map's Remove; its only caller is the same loop (the "done with this file" request).
+//   - sub_8296C3D8 (a virtual of the Xbox file system): looks a name up through the same sub_822C8810 with NO lock and
+//     reads the handle - and this one runs on the GAME thread (crash stack: sub_822BD110+0x259 <- sub_822C8810 <-
+//     sub_8296C3D8 <- sub_822FF6C0 <- sub_829B03C0 ..., while the file thread was in sub_822C8E50 -> sub_822C8088,
+//     the step right after sub_822C86D8).
+// So during start-up the game thread can walk the map while the file thread's Set moves the pairs (a grown array is
+// reallocated, the hash rebuilt): the walk reads a pair that is no longer one, takes its "string" pointer and the
+// compare (sub_82CDE308) reads unmapped memory. A race in the game's own code; the console's timing hid it.
+// The three functions now run under one host lock, so a lookup from the game thread never overlaps an add / remove.
+// The file thread's own lookups elsewhere need none (it is the only writer). Nothing inside waits on the game
+// thread: sub_822C86D8 only opens a file and allocates, sub_8296C3D8 only compares and stores three words.
+REXCVAR_DEFINE_BOOL(gow3_file_handle_map_lock, true, "Gears3",
+                    "The async file system's name -> handle map is locked between the file thread (add / remove) and "
+                    "the game thread's lookup (the rare start-up crash 'read of guest 0x4A9E7324'). false = as before");
+#if defined(GOW3_TU6) && GOW3_TU6
+namespace {
+std::recursive_mutex g_file_handle_map_mutex;
+void FileHandleMapLocked(void (*original)(PPCContext&, uint8_t*), PPCContext& ctx, uint8_t* base, const char* what,
+                         std::atomic<bool>& told) {
+  if (!REXCVAR_GET(gow3_file_handle_map_lock)) {
+    original(ctx, base);
+    return;
+  }
+  if (!told.exchange(true)) REXLOG_INFO("gow3_file_handle_map_lock: {} runs under the map lock", what);
+  std::lock_guard lock(g_file_handle_map_mutex);
+  original(ctx, base);
+}
+}  // namespace
+extern "C" void __imp__sub_822C86D8(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_822C86D8(PPCContext& __restrict ctx, uint8_t* base) {
+  static std::atomic<bool> told{false};
+  FileHandleMapLocked(__imp__sub_822C86D8, ctx, base, "the file thread's find-or-open (sub_822C86D8)", told);
+}
+extern "C" void __imp__sub_822CB1A8(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_822CB1A8(PPCContext& __restrict ctx, uint8_t* base) {
+  static std::atomic<bool> told{false};
+  FileHandleMapLocked(__imp__sub_822CB1A8, ctx, base, "the file thread's remove (sub_822CB1A8)", told);
+}
+extern "C" void __imp__sub_8296C3D8(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_8296C3D8(PPCContext& __restrict ctx, uint8_t* base) {
+  static std::atomic<bool> told{false};
+  FileHandleMapLocked(__imp__sub_8296C3D8, ctx, base, "the game thread's lookup (sub_8296C3D8)", told);
+}
+#endif
 
 // ---- Frame rate and the engine tick ---------------------------------------------------------------------------------
 // GetMaxTickRate 0x8253D9A0: f1 = 0.0 (no limit); with frame-rate smoothing on (flag 0x8343F7D4, bSmoothFrameRate=TRUE
@@ -775,12 +960,15 @@ void Gow3MaxTickRate(PPCRegister& f1) {  // after `lfs f1,0x4C8(r3)` at 0x8253D9
     Gow3ModChaptersTick();
     Gow3PathChoiceTick();
     Gow3SplitLayoutTick();       // GitHub #269
+    Gow3NativeUiViewportTick();  // 0.6.6 true 1080p: menus in the larger screen (off: one test)
     Gow3CheckpointStreamTick();  // GitHub #226
     Gow3AdaptiveTriggersTick(g_in_front_end.load(std::memory_order_relaxed));  // GitHub #245 (off: one flag test)
     Gow3FirstPersonTick();       // --gow3_first_person (off: one flag test)
-    // GitHub #353: COGBox tags after the players' names, grey (the Flash text fields render <font>)
+    // GitHub #353: COGBox tags after the players' names.
+    // No colour for now (Flippage / Shagg): the grey markup showed as text wherever the game draws a name as plain
+    // text (kill feed, names over heads, TacCom), and not every such place is found yet - plain on every screen.
     Ue3NameTagsTick([] { return ue3::obj::Ready() || ue3::obj::Init(gow3::addr::kGNamesVar, gow3::addr::kGObjectsVar); },
-                    Ue3NameTagStyle{"<font color='#808080'>", "</font>"});
+                    Ue3NameTagStyle{});
   }
   const int32_t v = LiveMaxFps();
   if (const int32_t m = REXCVAR_GET(gow3_menu_fps); m > 0 && g_in_front_end.load(std::memory_order_relaxed)) {
@@ -1114,10 +1302,10 @@ void Gow3ApplyDataPatchesIfRequested(rex::Runtime* runtime) {
   }
 }
 
-#if defined(GOW3_TU6) && GOW3_TU6  // the TU6 build's addresses; other builds clean the stored copies only
+#if defined(GOW3_TU6) && GOW3_TU6  // the TU6 build's addresses; other builds draw the kill feed with the markup
 // GitHub #353, the kill feed: the HUD keeps copies of the names in its DeathData entries and draws them through
 // Canvas's text calls, which draw the text as it is - so the tag's grey markup (rendered by the Flash scenes: lobby,
-// scoreboard) would show as text, for the one frame before name_tags.cpp takes it out of the stored copy. These are the
+// scoreboard) would show as text. These are the
 // engine's text routines under Canvas.DrawText / TextSize / StrLen (exec functions 82749400, 82749AE8, 82749850 call them with the
 // script's copy of the text): the original gets a copy, without the markup, of any argument holding it - the text itself, or an FString whose
 // data it is - before the original runs.
@@ -1143,4 +1331,16 @@ TEXT_HOOK(82748790)  // DrawText's
 TEXT_HOOK(82747930)  // TextSize's
 TEXT_HOOK(827486C0)  // StrLen's
 #undef TEXT_HOOK
+// The Canvas exec natives themselves: the hooks above act only inside one of these (the text routines are shared by
+// much of the engine; only the script's draw calls hold the copy that is cleaned) - review r368b.
+#define CANVAS_EXEC(addr)                                                                  \
+  extern "C" void __imp__sub_##addr(PPCContext& __restrict ctx, uint8_t* base);    \
+  extern "C" void sub_##addr(PPCContext& __restrict ctx, uint8_t* base) {          \
+    Ue3CanvasTextCall in_canvas;                                                     \
+    __imp__sub_##addr(ctx, base);                                                    \
+  }
+CANVAS_EXEC(82749400)  // Canvas.DrawText
+CANVAS_EXEC(82749AE8)  // Canvas.TextSize
+CANVAS_EXEC(82749850)  // Canvas.StrLen
+#undef CANVAS_EXEC
 #endif

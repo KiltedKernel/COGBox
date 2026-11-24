@@ -139,7 +139,7 @@ std::string sha256_file(const std::string &path)
 void drop_temp(FabJob &j)
 {
     if (j.work_dir.empty()) return;
-    mods_remove_tree(widen(j.work_dir));
+    cogbox_remove_tree(widen(j.work_dir));
     j.work_dir.clear();
 }
 
@@ -512,7 +512,7 @@ void fab_add_path(App &a, const std::string &path)
 void fab_update_from(App &a, int g, const std::string &folder, const std::string &zip)
 {
     if (zip.empty() || !game_is_port(g)) return;
-    if (a.run.proc) { set_message(a, kClose, true); return; }
+    if (a.run.proc || any_game_exe_running()) { set_message(a, kClose, true); return; }
     start_add(zip, g, folder);
 }
 
@@ -573,7 +573,7 @@ void fab_cancel(const std::shared_ptr<FabJob> &j)
         const FabInstallPlan plan = j->plan;
         const std::string work = j->work_dir;
         j->work_dir.clear();
-        worker().post([plan, work] { fab_install_abandon(plan); if (!work.empty()) mods_remove_tree(widen(work)); });
+        worker().post([plan, work] { fab_install_abandon(plan); if (!work.empty()) cogbox_remove_tree(widen(work)); });
     }
 }
 
@@ -696,7 +696,7 @@ void fab_state_poll(App &a)
     static bool swept = false;
     if (!swept) {   // what a closed (or crashed) COGBox left: temporary zips, unfinished installs; no job exists yet
         swept = true;
-        mods_remove_tree(widen(work_root()));
+        cogbox_remove_tree(widen(work_root()));
         sweep_partials();
     }
     bool installing = false;
@@ -740,11 +740,11 @@ void fab_state_poll(App &a)
 #ifdef COGBOX_FAB_NEXUS
             if (j->nexus.kind == "nexus") item.source = j->nexus;   // (the same Nexus mod installed: an update)
 #endif
-            std::string match;
+            std::string match, oldAuthor;
             for (const ModItem &m : mods_list(a, g)) {
                 if (!m.fab) continue;
                 auto r = fab_read_record(m.path);
-                if (r && fab_same_install(*r, item)) { match = m.folder; j->old_version = r->version; break; }
+                if (r && fab_same_install(*r, item)) { match = m.folder; j->old_version = r->version; oldAuthor = m.author; break; }
             }
             if (!j->update_folder.empty() && match != j->update_folder) {
                 fail_ui(a, *j, trf("This zip is {1}, not the mod you chose to update. Add it with Add a mod instead.", { j->name }));
@@ -754,7 +754,15 @@ void fab_state_poll(App &a)
             if (match.empty()) { j->phase = FabJob::Waiting; continue; }
             const std::string from = j->old_version.empty() ? "" : " " + j->old_version, to = j->info.version.empty() ? "" : " to " + j->info.version;
             // "Update Horde Bank 1.0 to 1.1?" - the name and versions as the mod gives them (not translated)
-            ask(a, "fabupdate", g, "Update a mod", tr("Update") + std::string(" ") + j->name + from + to + "?\n\n" +
+            // review r369 F9: a mod is told apart by its Name only (until Nexus ids), so the question shows which file and
+            // author the new version comes from, and says so when the author isn't the installed one's
+            const std::string zipName = narrow(std::filesystem::path(widen(j->zip)).filename().wstring());
+            const std::string newAuthor = j->info.author;
+            std::string who = "\n\n" + trf("From: {1}", { zipName }) + (newAuthor.empty() ? "" : " - " + trf("by {1}", { newAuthor }));
+            if (!oldAuthor.empty() && lower_s(newAuthor) != lower_s(oldAuthor))
+                who += "\n" + trf("Careful: the installed {1} is by {2}, this one by {3}. Only update if you trust this file.",
+                                   { j->name, oldAuthor, newAuthor.empty() ? tr("nobody named") : newAuthor });
+            ask(a, "fabupdate", g, "Update a mod", tr("Update") + std::string(" ") + j->name + from + to + "?" + who + "\n\n" +
                 tr("The installed version is kept as a backup in the mods folder. The mod keeps its place in the order, and stays on or off as it is now.")
 #ifdef COGBOX_FAB_NEXUS
                 + (j->nexus.kind == "nexus" ? "\n\n" + std::string(tr("Source: Nexus Mods")) : std::string())
@@ -764,7 +772,7 @@ void fab_state_poll(App &a)
             j->phase = FabJob::Asking;
         } else if (ph == FabJob::Waiting) {
             if (installing) continue;
-            if (a.run.proc) {
+            if (a.run.proc || any_game_exe_running()) {
                 if (!j->told_close) { j->told_close = true; set_message(a, std::string(tr(kClose)) + " " + tr("The mod is installed once the game is closed."), true); }
                 continue;
             }
@@ -787,7 +795,7 @@ void fab_state_poll(App &a)
             installing = true;
             worker().post([j] { run_unpack(j); });
         } else if (ph == FabJob::Unpacked) {
-            if (a.run.proc) {   // a game started during the unpack: the move waits for it to close (the .partial stays)
+            if (a.run.proc || any_game_exe_running()) {   // a game started during the unpack: the move waits for it to close (the .partial stays)
                 if (!j->told_close) { j->told_close = true; set_message(a, std::string(tr(kClose)) + " " + tr("The mod is installed once the game is closed."), true); }
                 continue;
             }

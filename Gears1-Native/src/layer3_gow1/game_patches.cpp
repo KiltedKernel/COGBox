@@ -3,6 +3,7 @@
 // matches the other three games' shape.
 #include "mouse_look.h"   // 0.5.0: CogMouseLookNoteFov
 #include <atomic>
+#include <cmath>   // 0.6.7 true 1080p menus: std::round, std::fabs
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -25,6 +26,8 @@
 #include <xenos/dev_tools.h>
 #include <xenos/frame_limiter.h>
 #include <ue3/config_bundle.h>
+#include <ue3/native_viewport.h>  // 0.6.6 true 1080p menus
+#include <ue3/objects.h>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -97,8 +100,269 @@ REXCVAR_DEFINE_BOOL(gow1_no_motion_blur, false, "Gears 1",
                     "No motion blur (Canary's TU5 patch by illusion and boma, as the render's own early exit)");
 REXCVAR_DEFINE_BOOL(gow1_no_gaussian_blur, false, "Gears 1",
                     "No depth of field: the gaussian blur radius 0 (Canary's TU5 patch by boma; the bloom is softer too)");
+// ---- Experiment (Shagg, 20 Nov): true 1080p, as Gears 2's --gow2_native_lines ---------------------------------------
+// sub_824BC3B0 (TU5; found by job 2177 as the only function loading both 720 and 1280): it asks the console for the
+// video mode and makes the screen height 720 (`li r11,720` at 0x824BC444, stored to the height global) and the width
+// aspect x 720 clamped to 900..1280 in r31, every path meeting at 0x824BC47C before `stw r31,0(r29)` (the width
+// global) at 0x824BC480; a second `li r11,720` at 0x824BC490 goes with that width into the block at 112(r1) / 116(r1)
+// that the next calls take (the device's size). --gow1_native_lines=1080 gives all three: 1920x1080. Needs
+// --gow2_renderer_edram_extended=true. Gears 1 draws its 720p frame as two tiles with 4x MSAA; how its tile maths takes
+// a larger frame is NOT known. NOT RUN YET: written from the generated code, to be proven by a gameplay run.
+REXCVAR_DEFINE_INT32(gow1_native_lines, 0, "Gears 1",
+                     "Experiment (true 1080p): the game's own screen height in lines, 0 = 720 as on the console. 1080 "
+                     "makes the game draw 1920x1080 itself (width = lines x 16 / 9, a multiple of 8). Needs "
+                     "--gow2_renderer_edram_extended=true")
+    .range(0, 1440);
+namespace {
+uint32_t Gow1NativeLines() {
+  static const uint32_t lines = [] {
+    const int v = REXCVAR_GET(gow1_native_lines);
+    return v <= 720 ? 0u : uint32_t(v + 7) / 8u * 8u;
+  }();
+  return lines;
+}
+// The game's own width times lines / 720 (a multiple of 8): the 16:10 and 4:3 video modes keep their shape.
+uint32_t Gow1NativeWidth(uint32_t game_width) { return (game_width * Gow1NativeLines() / 720u + 7u) / 8u * 8u; }
+}  // namespace
+void Gow1NativeSceneHeight(PPCRegister& r11) {  // after `li r11,720` at 0x824BC444
+  if (!Gow1NativeLines()) return;
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true)) REXLOG_INFO("gow1_native_lines: screen height {} -> {}", r11.u32, Gow1NativeLines());
+  r11.u64 = Gow1NativeLines();
+}
+void Gow1NativeSceneWidth(PPCRegister& r31) {  // before `li r5,120` at 0x824BC47C: the clamped width
+  if (!Gow1NativeLines()) return;
+  static std::atomic<bool> logged{false};
+  const uint32_t width = Gow1NativeWidth(r31.u32);
+  if (!logged.exchange(true)) REXLOG_INFO("gow1_native_lines: screen width {} -> {}", r31.u32, width);
+  r31.u64 = width;
+}
+void Gow1NativeDeviceHeight(PPCRegister& r11) {  // after `li r11,720` at 0x824BC490: the height beside that width
+  if (Gow1NativeLines()) r11.u64 = Gow1NativeLines();
+}
+// 0.6.6 (job 2189: at true 1080p the pause menu sat in the top-left 1280x720 of the 1920x1080 picture): the game's
+// FViewport still reports the console's 1280x720 to the UI (ue3/native_viewport.h: why, the checks, and the Gears 2 / 3
+// code it was read from: the UI scene client's GetViewportSize asks RenderViewport->GetSizeX / GetSizeY, virtual calls).
+// Gears 1's own code was NOT read for this (its generated files were not staged): the object is GEngine (cheats.cpp's
+// 0x82FCDD50) -> GameViewport -> Viewport with both offsets from the script classes (GameEngine.GameViewport,
+// GameViewportClient.Viewport) through ue3::obj - no guessed fallback - and Install checks the getters at run time
+// (slots 2 / 3 first, then any neighbouring pair: the 2006 engine's FViewport may order its virtuals differently).
+// Called from cheats.cpp's FEngineLoop::Tick override with its object-table opener; every 30 ticks until on.
+void Gow1NativeUiViewportTick(bool (*open_objects)()) {
+  namespace nv = ue3::native_viewport;
+  namespace obj = ue3::obj;
+  if (!Gow1NativeLines()) return;
+  static uint32_t ticks = 0;
+  static int fails = 0, gv_off = -1, vp_off = -1;
+  if (++ticks % 30 || fails > 20) return;
+  if (gv_off < 0 || vp_off < 0) {
+    if (ticks % 300 || !open_objects || !(obj::Ready() || open_objects())) return;  // FindClass misses: every 5 s at most
+    const uint32_t ge = obj::FindClass("GameEngine"), gvc = obj::FindClass("GameViewportClient");
+    if (!ge || !gvc) { ++fails; return; }
+    gv_off = obj::PropertyOffset(ge, "GameViewport");
+    vp_off = obj::PropertyOffset(gvc, "Viewport");
+    REXLOG_INFO("gow1_native_lines: GameEngine.GameViewport +{}, GameViewportClient.Viewport +{} (-1 = not found)", gv_off,
+                vp_off);
+    if (gv_off < 0 || vp_off < 0) {
+      fails = 100;
+      REXLOG_WARN("gow1_native_lines: the menus stay laid out in 1280x720 - the viewport properties were not found");
+      return;
+    }
+  }
+  const uint32_t engine = obj::Read32(0x82FCDD50u);
+  const uint32_t client = engine ? obj::Read32(engine + uint32_t(gv_off)) : 0;
+  const uint32_t viewport = client ? obj::Read32(client + uint32_t(vp_off)) : 0;
+  if (!viewport) return;
+  if (nv::g_installed.load(std::memory_order_relaxed)) {
+    nv::NoteViewport(viewport);
+    return;
+  }
+  const nv::Result r = nv::Install(viewport, Gow1NativeLines());
+  if (r.ok) {
+    REXLOG_INFO("gow1_native_lines: UI scene viewport {}x{} -> {}x{} (the game's FViewport 0x{:08X}: GetSizeX / GetSizeY "
+                "0x{:08X} / 0x{:08X}, vtable slots {} / {}) - the menus lay out in the larger screen",
+                r.w0, r.h0, r.w1, r.h1, viewport, r.fn_x, r.fn_y, r.slot, r.slot + 1);
+  } else if (++fails > 20) {
+    REXLOG_WARN("gow1_native_lines: the menus stay laid out in 1280x720 - {}", r.why);
+  }
+}
+
+// 0.6.7 (GitHub #408, Gears 1 part): true 1080p menus, as Gears 2's 1ba61f7 / 27cffac. Gears 1's FViewport is already
+// 1920x1080 by itself (the size function above), so the hook above changes nothing ("1920x1080 -> 1920x1080" in #408's
+// log) and the UI scenes lay out in 1920x1080 screen pixels: their pixel-authored parts (the 1280-wide backdrop images,
+// logo, text) stay 720p-sized - the title screen, main menu and pause menu of #408 and of jobs 2189 / 2200 / 2204 alike.
+// So, as in Gears 2: the UI scene client's GetViewportSize reports the console's 1280x720 (a size above 1280 / 720 is
+// divided by lines / 720) and the game scales the scenes to the screen (Gears 2, job 2206).
+// The function, sub_82304590 (TU5; 0x82304590..0x82304638 in codegen.partition.json): Canary's TU5 21:9 patch by boma
+// writes `li r3,550` / `b +8` at 0x823045F0 - the same two words his Gears 2 patch writes at disc 0x826E3720 / TU6
+// 0x826E9BF0 ("Set UIScene viewport height", in Gears 2's GetViewportSize sub_826E36C0 / sub_826E9B90), and all three
+// sit 0x60 bytes into their function. Its code was NOT read here (gow1_recomp.131.cpp was not staged), so nothing more
+// is assumed: the code must hold at least two virtual calls (GetSizeX / GetSizeY, `bctrl`), checked once; and the output
+// is recognised, not assumed - after the original, r5 (UT3's GetViewportSize(Scene, out)) or else r4 must point at two
+// floats holding the screen size (height = lines, width above 1280); that register is used from then on. Otherwise
+// nothing changes (0.6.6) and it is logged once. Gears 2's CanvasToScreen matrix step is not carried over (all zeros in
+// Gears 2 TU6, it never acted - notes 20 Nov 19:28).
+REXCVAR_DEFINE_BOOL(gow1_native_ui_layout720, true, "Gears 1",
+                    "With --gow1_native_lines: menus and other UI scenes lay out in the console's 1280x720 and are "
+                    "scaled to the whole screen (false = the 0.6.6 behaviour, laid out in screen pixels)");
+namespace {
+constexpr uint32_t kGow1UiViewportSize = 0x82304590u, kGow1UiViewportSizeEnd = 0x82304638u;
+std::atomic<int> g_ui_size_code{-1};  // -1 = not checked yet, 0 = not the expected code (left alone), 1 = ok
+std::atomic<int> g_ui_size_out{0};    // the register holding the output: 0 = not found yet, 4 / 5, -1 = given up
+float Gow1LoadF(const uint8_t* base, uint32_t a) {
+  const uint32_t v = ue3::native_viewport::Load32(base, a);
+  float f;
+  std::memcpy(&f, &v, 4);
+  return f;
+}
+void Gow1StoreF(uint8_t* base, uint32_t a, float f) {
+  uint32_t v;
+  std::memcpy(&v, &f, 4);
+  v = __builtin_bswap32(v);
+  std::memcpy(base + a, &v, 4);
+}
+bool Gow1UiSizeCodeOk(const uint8_t* base) {
+  int v = g_ui_size_code.load(std::memory_order_relaxed);
+  if (v >= 0) return v == 1;
+  int calls = 0;
+  for (uint32_t a = kGow1UiViewportSize; a < kGow1UiViewportSizeEnd; a += 4)
+    if (ue3::native_viewport::Load32(base, a) == 0x4E800421u) ++calls;  // bctrl
+  v = calls >= 2 ? 1 : 0;
+  g_ui_size_code.store(v);
+  if (v)
+    REXLOG_INFO("gow1_native_ui_layout720: GetViewportSize 0x{:08X} holds {} virtual calls - on", kGow1UiViewportSize, calls);
+  else
+    REXLOG_WARN("gow1_native_ui_layout720: 0x{:08X} holds {} virtual calls, not GetSizeX / GetSizeY - the menus stay laid "
+                "out in screen pixels (0.6.6)", kGow1UiViewportSize, calls);
+  return v == 1;
+}
+// Two floats at `out` holding the screen size: height = lines (+-0.5), width above 1280 (1920 at 16:9, 1728 at 16:10).
+bool Gow1UiOutIsScreen(const uint8_t* base, uint32_t out) {
+  if (!ue3::native_viewport::InHeap(out) || !ue3::obj::Readable(out, 8)) return false;
+  const float w = Gow1LoadF(base, out), h = Gow1LoadF(base, out + 4);
+  return std::fabs(h - float(Gow1NativeLines())) < 0.5f && w > 1280.5f && w < 8192.0f;
+}
+}  // namespace
+extern "C" void __imp__sub_82304590(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_82304590(PPCContext& __restrict ctx, uint8_t* base) {
+  // the arguments from entry: after the call r3 is the UBOOL result (Gears 2's 27cffac)
+  const uint32_t a4 = ctx.r4.u32, a5 = ctx.r5.u32;
+  __imp__sub_82304590(ctx, base);
+  if (!Gow1NativeLines() || ctx.r3.u32 == 0 || !REXCVAR_GET(gow1_native_ui_layout720) || !Gow1UiSizeCodeOk(base)) return;
+  int reg = g_ui_size_out.load(std::memory_order_relaxed);
+  if (reg < 0) return;
+  if (reg == 0) {
+    static std::atomic<int> misses{0};
+    if (Gow1UiOutIsScreen(base, a5)) {
+      reg = 5;
+    } else if (Gow1UiOutIsScreen(base, a4)) {
+      reg = 4;
+    } else {
+      if (misses.fetch_add(1) == 200) {
+        g_ui_size_out.store(-1);
+        REXLOG_WARN("gow1_native_ui_layout720: GetViewportSize's output not found (r5 0x{:08X}, r4 0x{:08X}) - the menus stay "
+                    "laid out in screen pixels (0.6.6)", a5, a4);
+      }
+      return;
+    }
+    g_ui_size_out.store(reg);
+  }
+  const uint32_t out = reg == 5 ? a5 : a4;
+  if (!ue3::native_viewport::InHeap(out)) return;
+  const float w0 = Gow1LoadF(base, out), h0 = Gow1LoadF(base, out + 4);
+  const float k = float(Gow1NativeLines()) / 720.0f;
+  const float w1 = w0 > 1280.5f ? std::round(w0 / k) : w0, h1 = h0 > 720.5f ? std::round(h0 / k) : h0;
+  Gow1StoreF(base, out, w1);
+  Gow1StoreF(base, out + 4, h1);
+  static std::atomic<bool> told{false};
+  if (!told.exchange(true))
+    REXLOG_INFO("gow1_native_lines: UI scene layout size {}x{} -> {}x{} (console pixels; GetViewportSize 0x{:08X}, output in "
+                "r{})", w0, h0, w1, h1, kGow1UiViewportSize, reg);
+}
+
+// 0.6.7, second half of the Gears 1 menu fix (job 2246: with the layout size alone the title screen and main menu were
+// a 1280x720 box in the top-left of the 1920x1080 picture - this engine does not scale a UI layout to the screen).
+// Read in the TU5 generated code (job af01):
+//   - FCanvas: +4 the render target, +12 / +16 the transform stack (TArray of 64-byte matrices, row vectors: m00 at
+//     +0, m11 at +20). Its constructor sub_823399A0 builds the base transform from the RENDER TARGET's size
+//     (GetSizeX / GetSizeY, vtable slots 0 / 1: 1 / (W / 2), -1 / (H / 2)) - never from GetViewportSize, which is why
+//     the 1280x720 layout stayed 1280x720 screen pixels. (Gears 2 builds its UI transform from GetViewportSize.)
+//   - sub_8233A0D8 = FCanvas::PushRelativeTransform(M): pushes M x top.
+//   - sub_82306D00 (scene client, r4 = FCanvas*, r5 = the scene / widget): multiplies the canvas opacity by the
+//     object's, PushRelativeTransform(the object's own matrix, sub_822E1E60), pre-render (vtable +420), the client's
+//     render (+268), post-render (+424), pops the transform. The only PushRelativeTransform in the scene client.
+// So while sub_82306D00 runs, the top of the canvas' transform stack is multiplied by lines / 720 in its rows 0 and 1
+// (layout pixel -> screen pixel, applied last because every later push is "M x top"), and put back afterwards. Only the
+// outermost call scales (a nested call already draws under the scaled top). Only with the layout hook above active
+// and after the code check (the `bl sub_8233A0D8` at 0x82306D54); the HUD and everything else drawn on the same canvas
+// outside UI scenes is not touched.
+namespace {
+constexpr uint32_t kGow1UiRenderPushSite = 0x82306D54u, kGow1UiRenderPushWord = 0x48033385u;  // bl 0x8233A0D8
+std::atomic<int> g_ui_render_code{-1};
+thread_local int t_ui_render_depth = 0;
+bool Gow1UiRenderCodeOk(const uint8_t* base) {
+  int v = g_ui_render_code.load(std::memory_order_relaxed);
+  if (v >= 0) return v == 1;
+  const uint32_t w = ue3::native_viewport::Load32(base, kGow1UiRenderPushSite);
+  v = w == kGow1UiRenderPushWord ? 1 : 0;
+  g_ui_render_code.store(v);
+  if (v)
+    REXLOG_INFO("gow1_native_ui_layout720: UI scene render 0x82306D00 found (PushRelativeTransform call at 0x{:08X}) - "
+                "scenes are scaled to the screen", kGow1UiRenderPushSite);
+  else
+    REXLOG_WARN("gow1_native_ui_layout720: 0x{:08X} holds 0x{:08X}, not the expected call - UI scenes are not scaled",
+                kGow1UiRenderPushSite, w);
+  return v == 1;
+}
+}  // namespace
+extern "C" void __imp__sub_82306D00(PPCContext& __restrict ctx, uint8_t* base);
+extern "C" void sub_82306D00(PPCContext& __restrict ctx, uint8_t* base) {
+  const uint32_t canvas = ctx.r4.u32;
+  uint32_t top = 0;
+  float saved[8] = {};
+  // the layout hook must have recognised its output (g_ui_size_out 4 / 5): otherwise the scenes still lay out in
+  // screen pixels and must not be scaled
+  if (Gow1NativeLines() > 720u && REXCVAR_GET(gow1_native_ui_layout720) && g_ui_size_out.load(std::memory_order_relaxed) > 0 &&
+      t_ui_render_depth == 0 && Gow1UiRenderCodeOk(base) && ue3::native_viewport::InHeap(canvas) &&
+      ue3::obj::Readable(canvas, 24)) {
+    const uint32_t data = ue3::native_viewport::Load32(base, canvas + 12), count = ue3::native_viewport::Load32(base, canvas + 16);
+    if (count >= 1 && count < 256 && ue3::native_viewport::InHeap(data) && ue3::obj::Readable(data + (count - 1) * 64u, 64)) {
+      top = data + (count - 1) * 64u;
+      const float k = float(Gow1NativeLines()) / 720.0f;
+      for (int i = 0; i < 8; ++i) {
+        saved[i] = Gow1LoadF(base, top + uint32_t(i) * 4u);
+        Gow1StoreF(base, top + uint32_t(i) * 4u, saved[i] * k);
+      }
+      static std::atomic<int> told{0};
+      if (told.fetch_add(1) < 3)
+        REXLOG_INFO("gow1_native_ui_layout720: scene 0x{:08X} on canvas 0x{:08X} (transform stack {}): rows 0 / 1 x {} - "
+                    "m00 {} -> {}, m11 {} -> {}, translation {} {}", ctx.r5.u32, canvas, count, k, saved[0], saved[0] * k,
+                    saved[5], saved[5] * k, Gow1LoadF(base, top + 48), Gow1LoadF(base, top + 52));
+    }
+  }
+  ++t_ui_render_depth;
+  __imp__sub_82306D00(ctx, base);
+  --t_ui_render_depth;
+  if (top) {
+    // the stack is back at the same depth (the function pops what it pushed); the array may have been reallocated by
+    // its push, so the address is taken again
+    const uint32_t data = ue3::native_viewport::Load32(base, canvas + 12), count = ue3::native_viewport::Load32(base, canvas + 16);
+    if (count >= 1 && count < 256 && ue3::native_viewport::InHeap(data) && ue3::obj::Readable(data + (count - 1) * 64u, 64)) {
+      const uint32_t now = data + (count - 1) * 64u;
+      for (int i = 0; i < 8; ++i) Gow1StoreF(base, now + uint32_t(i) * 4u, saved[i]);
+    }
+  }
+}
+
+// 0.6.5 (Shagg 16 Nov: 16:10): with a 1152x720 video mode Gears 2 / 3 / Judgment fill a 16:10 screen, but Gears 1 kept
+// 16:9 with bars (job 1969's gameplay shots): its view code (sub_82392008, TU5) letterboxes to the camera's aspect when
+// the camera's constrain flag (bit 1 of the word at +432) is set. Canary's TU5 16:10 patch by boma makes the branch at
+// 0x82392530 always skip that; here the flag test reads 0 instead (after the rlwinm at 0x82392528). Checked at start-up.
+REXCVAR_DEFINE_BOOL(gow1_no_aspect_lock, false, "Gears 1",
+                    "The view fills the picture's own shape (16:10) instead of a letterboxed 16:9 (Canary's TU5 patch by boma)");
 namespace {
 std::atomic<bool> g_no_gaussian{false};
+std::atomic<bool> g_no_aspect_lock{false};
 uint32_t GuestWord(const uint8_t* m, uint32_t a) {
   const uint8_t* p = m + a;
   return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
@@ -126,6 +390,17 @@ void Gow1InstallPostFxSwitches(rex::Runtime* runtime) {
       REXLOG_INFO("gow1_no_gaussian_blur: on (depth of field off, softer bloom)");
     }
   }
+  if (REXCVAR_GET(gow1_no_aspect_lock)) {
+    if (GuestWord(m, 0x82392528) != 0x556B0042u || GuestWord(m, 0x82392530) != 0x419A009Cu) {   // rlwinm r11,r11,0,1,1; beq cr6,+0x9C
+      REXLOG_WARN("gow1_no_aspect_lock: the code at 0x82392528 is not TU5's - left alone");
+    } else {
+      g_no_aspect_lock.store(true);
+      REXLOG_INFO("gow1_no_aspect_lock: on (the view fills the picture's shape)");
+    }
+  }
+}
+void Gow1NoAspectLock(PPCRegister& r11) {   // after `rlwinm r11,r11,0,1,1` at 0x82392528: the constrain flag
+  if (g_no_aspect_lock.load(std::memory_order_relaxed)) r11.u64 = 0;
 }
 void Gow1NoGaussianBlurA(PPCRegister& f1) {   // after `lfs f1,12(r26)` at 0x82539568
   if (g_no_gaussian.load(std::memory_order_relaxed)) f1.f64 = 0.0;
@@ -156,6 +431,24 @@ void Gow1SkipLogoStep(PPCRegister& r11) {   // gow1_manifest.toml: the start-up 
   r11.u64 = 3;
 }
 void Gow1SkipLogoStep2(PPCRegister& r11) { Gow1SkipLogoStep(r11); }
+// GitHub #400 (hevesij, 0.6.5): "only the Microsoft logo is skipped; the Epic Games logo still appears". The two step
+// hooks above only act when the player steps from one film to the next (sub_8222E220); a logo that was started another
+// way - the first film of a copy without a rating film - played in full. The film player's per-tick check
+// (sub_8222D9C0) reads the pads and, on a button, calls its skip routine (sub_8222E088: the first call marks the
+// start-up films as being skipped, the next one stops the film and steps on). With --gow1_skip_logos, while the film
+// index (r31 + 68) is 1 (EpicLogo) or 2 (MGSLogo), the tick's "a button was pressed" flag (r28) is set just before it
+// is tested (0x8222DB00) - exactly what a player pressing A at the logo does, however that logo was started.
+void Gow1SkipLogoTick(PPCRegister& r28, PPCRegister& r31) {
+  if (!REXCVAR_GET(gow1_skip_logos)) return;
+  rex::Runtime* runtime = rex::Runtime::instance();
+  const uint8_t* m = runtime ? runtime->virtual_membase() : nullptr;
+  if (!m || !r31.u32) return;
+  const uint32_t index = GuestWord(m, r31.u32 + 68);
+  if (index != 1 && index != 2) return;
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true)) REXLOG_INFO("gow1_skip_logos: logo film {} playing - skipped as a button press would", index);
+  r28.u64 = 1;
+}
 
 // 0.3.0 tidy-up: the job 708 chapter-jump experiment (URL starts) is gone with the launcher's "Start at". Its three
 // hooks stay in gow1_manifest.toml (the generated code calls them) but do nothing now - no per-tick check or logging.

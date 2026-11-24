@@ -57,14 +57,11 @@ endif()
 
 # Gears2-Native (notes/63): which game version the build targets. base = the disc (0.0.0.5, gow2_manifest.toml,
 # generated/default); tu6 = Title Update 6 (0.0.6.5, gow2_manifest_tu6.toml, generated/tu6; tools\build.ps1 -Tu6).
-set(GN_GAME_VERSION "base" CACHE STRING "Game version: base (disc 0.0.0.5) or tu6 (Title Update 6)")
-if(GN_GAME_VERSION STREQUAL "tu6")
-    set(GN_GEN_DIR generated/tu6)
-    set(GN_MANIFEST gow2_manifest_tu6.toml)
-else()
-    set(GN_GEN_DIR generated/default)
-    set(GN_MANIFEST gow2_manifest.toml)
-endif()
+# 0.6.6 (Shagg 20 Nov: "There should be NO DISC VERSION, only TU versions"): Title Update 6 is the only version built.
+# The disc manifest (gow2_manifest.toml) and generated/default are gone; a build folder that cached "base" is moved to tu6.
+set(GN_GAME_VERSION "tu6" CACHE STRING "Game version: tu6 (Title Update 6) - the only one" FORCE)
+set(GN_GEN_DIR generated/tu6)
+set(GN_MANIFEST gow2_manifest_tu6.toml)
 
 # Include entrypoint generated code if codegen has been run.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${GN_GEN_DIR}/sources.cmake")
@@ -127,10 +124,25 @@ endmacro()
 # codegen, including one a project assembles itself rather than taking the
 # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
 # names it.
+# Speed study (20 Nov, job 2172): with non_argument_as_local = true in the manifest the generated code needs
+# tools/localize_fix.py straight after EVERY codegen run, in the same build step. Run from tools/build.ps1 between the
+# codegen target and the compile it was undone: ninja ran codegen again (outputs codegen leaves untouched stay older than
+# the manifest, so the step counts as out of date), which rewrote the fixed files, and the game crashed at start
+# (sub_82CEFC78 reading its caller's r12).
+set(GN_LOCALIZE_FIX)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/${GN_MANIFEST}" GN_AS_LOCAL_LINES REGEX "^[ \t]*non_argument_as_local[ \t]*=[ \t]*true")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${GN_MANIFEST}")
+if(GN_AS_LOCAL_LINES)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(GN_LOCALIZE_FIX COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/localize_fix.py"
+                                "${CMAKE_CURRENT_SOURCE_DIR}/${GN_GEN_DIR}/*.cpp")
+    message(STATUS "Gears2-Native: ${GN_MANIFEST} has non_argument_as_local - localize_fix.py runs after codegen")
+endif()
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/${GN_GEN_DIR}/codegen.build.stamp"
            ${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
     COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/${GN_MANIFEST}
+    ${GN_LOCALIZE_FIX}
     DEPFILE "${CMAKE_CURRENT_SOURCE_DIR}/${GN_GEN_DIR}/codegen.d"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating recompiled code for gow2"

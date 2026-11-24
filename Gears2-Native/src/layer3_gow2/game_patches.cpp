@@ -37,6 +37,7 @@
 #include <xenos/frame_limiter.h>
 
 #include "gow2_addresses.h"
+#include <ue3/native_viewport.h>  // 0.6.6 true 1080p menus
 #include <ue3/objects.h>  // GitHub #313 pace check: ue3::obj::Read32 (safe guest reads; no table lookup)
 #include "mouse_look.h"  // GitHub #52: CogMouseLookNoteFov
 
@@ -71,8 +72,16 @@ REXCVAR_DEFINE_INT32(gow2_patch_query_wait, 2, "Gears2",
                      "Jobs 231/232 (notes/60): sub_82807588 (UE3's block-until-a-query-has-its-answer) polls ONE query in "
                      "a loop; 1 = after 32 quick polls each retry sleeps until our GPU side writes guest memory (1 ms max); "
                      "2 (default) = as 1 when the frame rate is capped (vsync on or --gow2_max_fps not -1), else off; 0 = off");
-REXCVAR_DEFINE_BOOL(gow2_patch_skip_coalesced_check, false, "Gears2",
-                    "Skip the Coalesced (engine .ini) hash check so edited files load (community patch, Sowa_95/boma)");
+REXCVAR_DEFINE_INT32(gow2_patch_query_buffered, 0, "Gears2",
+                     "Speed study (Gears 2 TU6, opt-in): UE3's occlusion test (sub_82730F70) no longer waits for a query "
+                     "answer that is not back yet - the query stays pending for the next frame (its answer is read then) "
+                     "and this frame the object is 1 = drawn (never wrongly hidden), 2 = as it was last decided "
+                     "(PC UE3's lag; may show an uncovered object a frame late); 0 = the game's own wait");
+// GitHub #392 / PR #393 (Shagg 19 Nov: "a behind the scenes option rather than something to select in the launcher"):
+// on by default, so an edited Coalesced loads with no launcher setting; =false brings the game's own check back.
+REXCVAR_DEFINE_BOOL(gow2_patch_skip_coalesced_check, true, "Gears2",
+                    "Skip the Coalesced (engine .ini) hash check so edited files load (community patch, Sowa_95/boma); "
+                    "on by default (GitHub #392), false = the game's own check");
 REXCVAR_DEFINE_BOOL(gow2_patch_show_fps, false, "Gears2", "Turn on the engine's FPS and frame-time display (community patch, Sowa_95)");
 REXCVAR_DEFINE_INT32(gow2_patch_texture_pool_mb, 196, "Gears2",
                      "Texture pool size in MB (0 = the game's 140; default 196 as Canary's Texture Streaming Fix, boma)");
@@ -202,6 +211,10 @@ void Gow2QueryPollYield() {
 void Gow2QueryWaitStep() {
   thread_local XenosWaitClock fl_clock;  // the frame log times this wait in every mode (also the spinning ones)
   XenosFrameWaitStep fl_step(kXenosWaitGameQuery, fl_clock);
+  if (XenosTimelineOn()) {  // speed study: when in the frame the game waits for answers
+    XenosTimelineMark(1, kTlGameQueryWaitBegin, true);
+    XenosTimelineMark(1, kTlGameQueryWaitEnd, false);
+  }
   const int32_t mode = REXCVAR_GET(gow2_patch_query_wait);
   if (mode == 0) return;
   // Job 232: uncapped (vsync off and no frame limit) the sleep cost ~2% in job 231; capped it saves ~0.3 of a core.
@@ -216,6 +229,53 @@ void Gow2QueryWaitStep() {
   if (!logged.exchange(true)) REXLOG_INFO("gow2_patch_query_wait: on - the query wait loop sleeps between polls");
   thread_local Gow2WaitStreak streak;
   Gow2SleepStep(streak, 32);
+}
+
+// Speed study 19 Nov (--gow2_patch_query_buffered; notes 20261119-2015): the frame was the game's 3.7 ms plus ~1.3 ms
+// waiting for occlusion answers. sub_828170F0 (RHIGetOcclusionQueryResult) asks GetData once, then loops with a
+// flush until the answer is back - it ignores its bWait argument. Its only caller, sub_82730F70 (one primitive's
+// occlusion update), then always releases the query and issues a new one. With the switch on: GetData is asked once;
+// not back = return "no answer" and remember it; the hook on the caller's release (0x8273116C) then skips the release
+// and the re-issue (the query stays at 4(r29), read next frame, when it has landed) and gives this frame's decision.
+namespace {
+thread_local bool t_query_late = false;
+std::atomic<uint64_t> g_query_asked{0}, g_query_late{0};
+}  // namespace
+#if defined(GOW2_TU6) && GOW2_TU6
+extern "C" void __imp__sub_828170F0(PPCContext& ctx, uint8_t* base);
+extern "C" void sub_82992348(PPCContext& ctx, uint8_t* base);
+extern "C" void sub_828170F0(PPCContext& ctx, uint8_t* base) {
+  if (REXCVAR_GET(gow2_patch_query_buffered) <= 0) {
+    __imp__sub_828170F0(ctx, base);
+    return;
+  }
+  // GetData(query, out, sizeof(DWORD), D3DGETDATA_FLUSH): job 2134 asked without the flush and 99.6% of the answers
+  // were never back, even a frame later - on the 360 the flush is what sends the pending commands (the query's end
+  // included) to the GPU, so an unflushed query never completes. The original's loop asks with the flush.
+  ctx.r5.u64 = 4;
+  ctx.r6.u64 = 1;
+  sub_82992348(ctx, base);
+  const uint64_t asked = g_query_asked.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (ctx.r3.u32 == 0) {  // S_OK: the answer is in *out
+    ctx.r3.u64 = 1;
+    return;
+  }
+  t_query_late = true;
+  const uint64_t late = g_query_late.fetch_add(1, std::memory_order_relaxed) + 1;
+  if ((late & (late - 1)) == 0 && late >= 64)
+    REXLOG_INFO("gow2_patch_query_buffered: {} of {} answers not back when asked - kept for the next frame", late, asked);
+  ctx.r3.u64 = 0;
+}
+#endif
+// 0x8273116C `addi r4,r29,4` (before the release): jump to 0x82731408 with this frame's decision in r25 / r28
+// (r28 = occluded, r25 = take the visible path) - the pending query is neither released nor replaced.
+bool Gow2QueryKeepLate(PPCRegister& r25, PPCRegister& r28, PPCRegister& r29) {
+  if (!t_query_late) return false;
+  t_query_late = false;
+  const bool occluded = REXCVAR_GET(gow2_patch_query_buffered) == 2 && ue3::obj::Read32(r29.u32 + 20) != 0;
+  r28.u64 = occluded ? 1 : 0;
+  r25.u64 = occluded ? 0 : 1;
+  return true;
 }
 
 // Job 225 (notes/60): sub_82977688 is one step of the XDK's wait for the GPU (sub_8298C2A0 calls it until the GPU's read
@@ -394,7 +454,54 @@ void Gow2UltrawideFov(PPCRegister& f0, PPCRegister& f30) {
 
 bool Gow2UltrawideNoConstrain() { return REXCVAR_GET(gow2_ultrawide); }  // jump_address_on_true: the beq is taken
 
+// ---- Experiment (Shagg, 20 Nov): the game draws above 1280x720 itself ------------------------------------------------
+// sub_82816638 (TU6; disc sub_82806A80) sets the screen size the whole renderer follows: it asks the console for the
+// video mode and, whatever that says, makes the height 720 (`li r11,720` at 0x828166C8, stored to 0x830EB348) and the
+// width aspect x 720 clamped to 900..1280 (stored to 0x830EB344 at 0x828166F8, or 1280 at 0x82816A24). A mode above
+// 720 lines is ignored (it falls back to 16:9), so reporting 1080p to the game changes nothing - the two numbers have
+// to be given here. --gow2_native_lines=1080 makes them 1920x1080 (16:9; ultrawide is left alone for now). The
+// console's 10 MiB of EDRAM cannot hold that (colour + depth = 3264 tiles of 2048): it needs
+// --gow2_renderer_edram_extended=true, as Xenia Canary's edram_tile_count = extended. Targets the game's pools cannot
+// hold get their own memory (gow2_rt_pool_grow, GitHub #94). TU6 only so far.
+REXCVAR_DEFINE_INT32(gow2_native_lines, 0, "Gears2",
+                     "Experiment (true 1080p): the game's own screen height in lines, 0 = 720 as on the console. 1080 "
+                     "makes the game draw 1920x1080 itself (width = lines x 16 / 9, a multiple of 8). Needs "
+                     "--gow2_renderer_edram_extended=true. With --gow2_ultrawide the wide picture is scaled the same way "
+                     "(1280x550 becomes 1920x826)")
+    .range(0, 1440);
+namespace {
+uint32_t Gow2NativeLines() {
+  static const uint32_t lines = [] {
+    const int v = REXCVAR_GET(gow2_native_lines);
+    if (v <= 720) return 0u;   // 0.6.6: also with --gow2_ultrawide (the wide height is scaled by lines / 720)
+    return uint32_t(v + 7) / 8u * 8u;
+  }();
+  return lines;
+}
+// review 20 Nov: the game's own width times lines / 720 (a multiple of 8), so the 16:10 and 4:3 video modes keep
+// their shape: 1280 -> 1920, 1152 -> 1728 at 1080 lines
+uint32_t Gow2NativeWidth(uint32_t game_width) { return (game_width * Gow2NativeLines() / 720u + 7u) / 8u * 8u; }
+}  // namespace
+// 0x828166F8 `stw r11,-19644(r10)` (before it) and 0x82816A20 `li r11,1280` (after it): the screen width.
+void Gow2NativeSceneWidth(PPCRegister& r11) {
+  if (!Gow2NativeLines()) return;
+  static bool logged = false;
+  const uint32_t width = Gow2NativeWidth(r11.u32);
+  if (!logged) { logged = true; REXLOG_INFO("gow2_native_lines: screen width {} -> {}", r11.u32, width); }
+  r11.u64 = width;
+}
+
+void Gow2NativeSceneWidthMax(PPCRegister& r11) { Gow2NativeSceneWidth(r11); }   // the second site (one name per hook)
+
 void Gow2UltrawideSceneHeight(PPCRegister& r11, PPCRegister& f13) {
+  if (Gow2NativeLines()) {
+    // with ultrawide: the wide height (550 of 720 at 21:9) times lines / 720, even - the width hooks give 1280 -> 1920
+    const uint32_t rows = REXCVAR_GET(gow2_ultrawide) ? (Gow2WideHeight() * Gow2NativeLines() / 720u + 1u) & ~1u : Gow2NativeLines();
+    static bool logged = false;
+    if (!logged) { logged = true; REXLOG_INFO("gow2_native_lines: screen height {} -> {} (aspect factor {}{})", r11.u32, rows, f13.f64, REXCVAR_GET(gow2_ultrawide) ? ", ultrawide" : ""); }
+    r11.u64 = rows;
+    return;
+  }
   if (!REXCVAR_GET(gow2_ultrawide)) return;
   static bool logged = false;
   if (!logged) { logged = true; REXLOG_INFO("gow2_ultrawide: scene buffer height {} -> {} (aspect factor {})", r11.u32, Gow2WideHeight(), f13.f64); }
@@ -404,7 +511,7 @@ void Gow2UltrawideSceneHeight(PPCRegister& r11, PPCRegister& f13) {
 void Gow2UltrawideUiHeight(PPCRegister& r3) {
   if (!REXCVAR_GET(gow2_ultrawide)) return;
   static bool logged = false;
-  const uint32_t ui = Gow2WideHeight() == 550 ? 564u : (Gow2WideHeight() * 564u / 550u + 1u) & ~1u;
+  const uint32_t ui = Gow2WideHeight() == 550 ? 564u : (Gow2WideHeight() * 564u / 550u + 1u) & ~1u;   // (true 1080p: scaled in GetViewportSize)
   if (!logged) { logged = true; REXLOG_INFO("gow2_ultrawide: UI viewport height {} -> {}", r3.u32, ui); }
   r3.u64 = ui;
 }
@@ -452,10 +559,108 @@ inline void StoreF(uint8_t* base, uint32_t a, float f) {
 #define GOW2_UI_JOIN(a, b) GOW2_UI_JOIN2(a, b)
 extern "C" void GOW2_UI_JOIN(__imp__, GOW2_UI_VIEWPORT_SIZE)(PPCContext& __restrict ctx, uint8_t* base);
 extern "C" void GOW2_UI_JOIN(__imp__, GOW2_UI_VIEWPORT_ORIGIN)(PPCContext& __restrict ctx, uint8_t* base);
+// 0.6.6 true 1080p menus. UUISceneClient's CanvasToScreen (UT3 script: "Stores the 3D projection matrix being used
+// to render the UI"; UpdateCanvasToScreen "should be called anytime the viewport size or origin changes" -
+// wiki.beyondunreal.com/UE3:UISceneClient_(UT3)). At client +112 (16 floats, row vectors: m00 +112, m11 +132, the
+// translation row +160..+172) per santiquiroz's port (disc build; TU6 assumed the same - checked here, not trusted).
+// A canvas point (x, y, 0, 1) times the matrix, divided by w, is the screen position in -1..1. Wanted: the layout
+// corners (0,0) / (W,H) at (-1,1) / (1,-1). If instead (W*k, H*k) lands there (the matrix was built for the 1920x1080
+// FViewport), rows 0 and 1 are multiplied by k (layout pixel -> screen pixel first), and the inverse (+176, used only
+// if matrix x inverse is the identity) gets its columns 0 and 1 divided by k. Anything else: logged, left alone.
+REXCVAR_DEFINE_BOOL(gow2_native_ui_layout720, true, "Gears2",
+                    "With --gow2_native_lines: menus and other UI scenes lay out in the console's 1280x720 and are "
+                    "scaled to the whole screen (false = the 0.6.6 behaviour, laid out in screen pixels)");
+namespace {
+struct UiCorner { float x, y; bool ok; };
+UiCorner Gow2UiProject(const uint8_t* base, uint32_t m, float x, float y) {
+  auto e = [&](int r, int c) { return uicentre::LoadF(base, m + uint32_t(r * 4 + c) * 4u); };
+  const float X = x * e(0, 0) + y * e(1, 0) + e(3, 0), Y = x * e(0, 1) + y * e(1, 1) + e(3, 1);
+  const float W = x * e(0, 3) + y * e(1, 3) + e(3, 3);
+  if (!(std::fabs(W) > 1e-6f) || !std::isfinite(X) || !std::isfinite(Y)) return {0, 0, false};
+  return {X / W, Y / W, true};
+}
+bool Gow2UiCornersFit(const uint8_t* base, uint32_t m, float w, float h) {
+  const UiCorner a = Gow2UiProject(base, m, 0, 0), b = Gow2UiProject(base, m, w, h);
+  constexpr float t = 0.02f;
+  return a.ok && b.ok && std::fabs(a.x + 1) < t && std::fabs(a.y - 1) < t && std::fabs(b.x - 1) < t && std::fabs(b.y + 1) < t;
+}
+void Gow2NativeUiMatrix(uint32_t client, float w, float h, float k, uint8_t* base) {
+  const uint32_t m = client + 112u, inv = client + 176u;
+  if (!(w > 0) || !(h > 0) || Gow2UiCornersFit(base, m, w, h)) return;  // already right (or fixed before)
+  static std::atomic<int> fixes{0}, misses{0};
+  auto dump = [&](const char* what) {
+    std::string t;
+    for (int i = 0; i < 32; ++i) t += fmt::format("{}{:.4f}", i ? (i == 16 ? " | inv " : " ") : "", uicentre::LoadF(base, m + uint32_t(i) * 4u));
+    const UiCorner a = Gow2UiProject(base, m, 0, 0), b = Gow2UiProject(base, m, w, h);
+    REXLOG_INFO("gow2_native_lines: UI matrix {} (client 0x{:08X}, layout {}x{}, corners ({:.3f},{:.3f}) ({:.3f},{:.3f})): {}", what,
+                client, w, h, a.x, a.y, b.x, b.y, t);
+  };
+  if (!Gow2UiCornersFit(base, m, w * k, h * k)) {
+    if (misses.fetch_add(1) < 3) dump("NOT changed - neither the layout nor the screen size fits");
+    return;
+  }
+  // inverse check (before changing m): (m x inv)[i][j] == identity
+  bool inv_ok = true;
+  for (int i = 0; i < 4 && inv_ok; ++i)
+    for (int j = 0; j < 4; ++j) {
+      float sum = 0;
+      for (int n = 0; n < 4; ++n) sum += uicentre::LoadF(base, m + uint32_t(i * 4 + n) * 4u) * uicentre::LoadF(base, inv + uint32_t(n * 4 + j) * 4u);
+      if (std::fabs(sum - (i == j ? 1.0f : 0.0f)) > 0.01f) { inv_ok = false; break; }
+    }
+  const bool first = fixes.fetch_add(1) < 3;
+  if (first) dump("before");
+  for (int c = 0; c < 4; ++c)
+    for (int r = 0; r < 2; ++r) uicentre::StoreF(base, m + uint32_t(r * 4 + c) * 4u, uicentre::LoadF(base, m + uint32_t(r * 4 + c) * 4u) * k);
+  if (inv_ok)
+    for (int r = 0; r < 4; ++r)
+      for (int c = 0; c < 2; ++c) uicentre::StoreF(base, inv + uint32_t(r * 4 + c) * 4u, uicentre::LoadF(base, inv + uint32_t(r * 4 + c) * 4u) / k);
+  if (first) {
+    dump(inv_ok ? "after (x scale, inverse too)" : "after (x scale; +176 is not its inverse - left alone)");
+    REXLOG_INFO("gow2_native_lines: UI matrix fixed: corners now fit the layout: {}", Gow2UiCornersFit(base, m, w, h));
+  }
+}
+}  // namespace
 // UBOOL GetViewportSize(const UUIScene*, FVector2D& out): r5 = out
 extern "C" void GOW2_UI_VIEWPORT_SIZE(PPCContext& __restrict ctx, uint8_t* base) {
   const uint32_t out = ctx.r5.u32;
+  // job 2204: r3 holds the scene client only on entry - after the call it is the UBOOL result (1), and 1 + 112 = guest
+  // 0x71 crashed the matrix check. Keep the client from here.
+  const uint32_t client = ctx.r3.u32;
+  // 0.6.6 (job 2189): the game's FViewport (this scene client's RenderViewport, +64: `lwz r11,64(r31)` here) reports the
+  // larger screen from now on - its GetSizeX / GetSizeY (vtable +8 / +12, the two bctrl in this function) through the
+  // dispatcher (ue3/native_viewport.h), so the canvas and every other caller see it too. Set before the original runs.
+  if (Gow2NativeLines() && !ue3::native_viewport::g_installed.load(std::memory_order_relaxed) && ctx.r3.u32) {
+    static int tries = 0;
+    if (tries < 20) {
+      const uint32_t viewport = ue3::obj::Read32(ctx.r3.u32 + 64u);
+      const ue3::native_viewport::Result r = viewport ? ue3::native_viewport::Install(viewport, Gow2NativeLines())
+                                                      : ue3::native_viewport::Result{};
+      if (r.ok)
+        REXLOG_INFO("gow2_native_lines: UI scene viewport (the game's FViewport 0x{:08X}) {}x{} -> {}x{}: GetSizeX / "
+                    "GetSizeY 0x{:08X} / 0x{:08X}, vtable slots {} / {}", viewport, r.w0, r.h0, r.w1, r.h1, r.fn_x, r.fn_y,
+                    r.slot, r.slot + 1);
+      else if (viewport && ++tries == 20)
+        REXLOG_WARN("gow2_native_lines: the FViewport keeps 1280x720 ({}) - only the UI scenes' size is scaled", r.why);
+    }
+  }
   GOW2_UI_JOIN(__imp__, GOW2_UI_VIEWPORT_SIZE)(ctx, base);
+  // 0.6.6 (job 2200: the 0.6.6 scale-up changed nothing - the FViewport already is 1920x1080, so this size already
+  // was): the UI scenes are authored in pixels of the console's 1280x720 - full-width images are 0..1280 pixels
+  // (Position.Value[2] = 1280; santiquiroz's gow2_widescreen.cpp, disc build), text has no auto-scale - so with a
+  // 1920x1080 layout space the percent-placed parts fill the screen and the pixel-placed ones stay 720p-sized at the
+  // top-left (the pause backdrop x 0..1280, y 70..950). So the scenes lay out in the console's size again (a value
+  // above 1280 / 720 is divided by lines / 720) and the scene client's canvas-to-screen matrix is made to map that
+  // 1280x720 onto the whole screen (Gow2NativeUiMatrix, checked by projecting the corners).
+  if (Gow2NativeLines() && ctx.r3.u32 != 0 && out && REXCVAR_GET(gow2_native_ui_layout720)) {
+    const float w0 = uicentre::LoadF(base, out), h0 = uicentre::LoadF(base, out + 4);
+    const float k = float(Gow2NativeLines()) / 720.0f;
+    const float w1 = w0 > 1280.5f ? std::round(w0 / k) : w0, h1 = h0 > 720.5f ? std::round(h0 / k) : h0;
+    uicentre::StoreF(base, out, w1);
+    uicentre::StoreF(base, out + 4, h1);
+    static std::atomic<bool> told{false};
+    if (!told.exchange(true)) REXLOG_INFO("gow2_native_lines: UI scene layout size {}x{} -> {}x{} (console pixels)", w0, h0, w1, h1);
+    if (client) Gow2NativeUiMatrix(client, w1, h1, k, base);
+  }
   if (!uicentre::On() || ctx.r3.u32 == 0 || !out) return;
   const float w = uicentre::LoadF(base, out), h = uicentre::LoadF(base, out + 4);
   const float w169 = std::round(h * 16.0f / 9.0f / 2.0f) * 2.0f;

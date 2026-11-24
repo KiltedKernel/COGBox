@@ -972,7 +972,7 @@ void front_draw(App &a, ImVec2 size)
             const bool hit = th_button("ACHIEVEMENTS", ImVec2(aw, bh), true, F_HEAD, sel2);
             hover_tip(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), tr("Your achievements in all four games."));
             if (hit || (nav && padA && a.frontSel == 2)) {
-                a.page = g; a.zoomTo = SCR_PAGE; a.zoomStart = now; a.tab = 4; a.barSel = -1;   // gs::Tab::Achievements
+                a.page = g; a.zoomTo = SCR_PAGE; a.zoomStart = now; a.tab = (int)gs::Tab::Achievements; a.barSel = -1;
                 achievements_tab_open_all();
             }
             // social step 3: SOCIAL, right of ACHIEVEMENTS, opens the SOCIAL tab (friends, invites, the multiplayer server)
@@ -980,7 +980,7 @@ void front_draw(App &a, ImVec2 size)
             const bool socialPressed = th_button("SOCIAL", ImVec2(sw, bh), true, F_HEAD, sel3);
             hover_tip(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), tr("Friends, invites and online play."));
             if (socialPressed || (nav && padA && a.frontSel == 3)) {
-                a.page = g; a.zoomTo = SCR_PAGE; a.zoomStart = now; a.tab = 5; a.barSel = -1;   // page.cpp k_tabSocial
+                a.page = g; a.zoomTo = SCR_PAGE; a.zoomStart = now; a.tab = kTabSocial; a.barSel = -1;
             }
             // FABRICATOR, right of SOCIAL: the local mod manager (LIBRARY, STORE, CREATOR). While it adds or packs a mod,
             // the figure shows in the button's corner and a thin bar along its bottom.
@@ -1081,7 +1081,14 @@ void front_draw(App &a, ImVec2 size)
             float prog = 0; std::string uerr;
             const int us_state = update_install_state(&prog, &uerr);
             static bool restarting = false;
-            if (us_state == 3 && !restarting) { restarting = true; if (update_restart()) a.quit = true; }
+            if (us_state == 3 && !restarting) {
+                restarting = true;
+                if (update_restart()) a.quit = true;
+                else {   // 0.6.6 (review #23): say so instead of showing RESTARTING for ever; the update stays in place
+                    set_message(a, "The update is installed, but the new COGBox couldn't be started (error " + std::to_string(GetLastError()) +
+                                       ") - close COGBox and start it again.", true);
+                }
+            }
             char pct[16];
             snprintf(pct, sizeof pct, "%d%%", int(prog * 100.0f + 0.5f));
             std::string lbl = us_state == 1 ? tr("DOWNLOADING") + std::string(" ") + pct

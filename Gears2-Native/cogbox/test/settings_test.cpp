@@ -42,6 +42,8 @@ std::string exe_needle(const std::string& alias, int g) {
     if (alias == "aspect") return "gow3_aspect";
     if (alias == "edits") return "'file|section|~=old>new'";
     if (alias == "avx") return "gn_cpu_level=x86-64-v";
+    if (alias == "chx") return "GitHub #342: the HUD hidden whenever a player exists";   // console.cpp's --ue3_cheat_* (#342)
+    if (alias == "chk") return "GitHub #264 / #342: the developers' cheat keys";            // the keys' new description
     if (alias == "adt") return g == 0 ? "Gears 2 weapon feel for DualSense pads" : "Gears 3 weapon feel for DualSense pads";   // GitHub #245
     if (alias == "adtg") {   // GitHub #245: each game's own needle (Judgment, Gears 1 too)
         static const char* adt[4] = { "Gears 2 weapon feel for DualSense pads", "Gears 3 weapon feel for DualSense pads",
@@ -63,7 +65,6 @@ std::string rt_needle(const std::string& a) {
 std::string file_name(const std::string& a) {
     if (a == "fsr") return "amd_fidelityfx_loader_dx12.dll";
     if (a == "dlss") return "nvngx_dlss.dll";
-    if (a == "xess") return "libxess.dll";
     if (a == "fgdll") return "amd_fidelityfx_framegeneration_dx12.dll";
     return a;
 }
@@ -152,14 +153,14 @@ const char* const k_builtin[] = {
     "game=0",
     "game=0;upd=1;Version=0;Resolution=2;AAMode=3;gpus=NVIDIA GeForce RTX 4080;files=dlss,fsr;exe=fif,ups,reflex,mute,edits;rt=vs,lat;SceneMode=2;FrameCap=7;Vsync=1;hz=144;LowLag=1;Mute=1;SkipLogos=1;Trilinear=1",
     "game=0;Resolution=4;AAMode=3;gpus=AMD Radeon RX 7900 XTX;exe=fif,al2;LowLag=1;FrameCap=4;Fullscreen=2;Monitor=2;screens=2;HDR=1;PaperWhite=250;Peak=1400;Mnk=1;Sens=1.3",
-    "game=0;Fov=115;MotionBlur=0;DoF=0;Shake=2;DeadZone=2;Vibration=0;WindowSize=3;Players=1;FpsMode=1;Pool=0;Aniso=0;extra=--gow2_frame_times={LOG}\\ft.csv|# comment| --foo=1 |",
+    "game=0;Fov=115;MotionBlur=0;DoF=0;Shake=2;DeadZoneL=10;DeadZoneR=10;Vibration=0;WindowSize=3;Players=1;FpsMode=1;Pool=0;Aniso=0;extra=--gow2_frame_times={LOG}\\ft.csv|# comment| --foo=1 |",
     "game=0;upd=1;Version=1;LowLag=0;exe=fif,fg;rt=vs,lat;FrameCap=2;Vsync=1;hz=60;FrameGen=1;files=fgdll;FpsMode=3",
     "game=0;AAMode=2;FrameCap=4;Vsync=1;hz=0;rt=vs;Pool=3;DrawDist=2;MipFade=1;Ultrawide=1;gpus=Microsoft Basic Display Adapter",
     "game=1",
     "game=1;upd=1;Version=0;Cheats=1;Mutators=1;Resolution=4;exe=fif;FrameCap=2",
     "game=1;upd=1;Version=1;Cheats=1;Mutators=1;Resolution=4;exe=fif,aspect,mute;Mute=1;FrameCap=2;Vsync=1;rt=vs;hz=0",
     "game=1;FrameCap=2;Vsync=1;rt=vs;hz=144;Ultrawide=1;Resolution=4;FpsMode=3;Aniso=1;Trilinear=0;MipFade=0;Shake=1;DrawDist=1;SkipLogos=1",
-    "game=1;FrameCap=4;AAMode=4;files=xess;exe=ups,fif;SceneMode=1;Resolution=2;Players=3;LowLag=0;rt=lat",
+    "game=1;FrameCap=4;AAMode=2;files=fsr;exe=ups,fif;SceneMode=1;Resolution=2;Players=3;LowLag=0;rt=lat",
     "game=1;FrameCap=7;Vsync=1;rt=vs;hz=240;FrameGen=1;exe=fg;files=fgdll;Fov=80",
     "game=1;AdaptiveTriggers=1;exe=adt;rt=adt",   // GitHub #245: sent
     "game=1;AdaptiveTriggers=1;exe=adt",          // runtime without patch 98: greyed, not sent
@@ -167,11 +168,26 @@ const char* const k_builtin[] = {
     "game=2;upd=1;SkipLogos=1;Pool=1;FpsMode=3;FrameCap=7;Ultrawide=1",
     "game=2;Pool=3;FrameCap=2;Vsync=1;rt=vs;hz=165;FrameGen=1;exe=fg,fif,mute;files=fgdll;Mute=1;LowLag=1;gpus=Intel(R) UHD Graphics/NVIDIA GeForce GTX 1080",
     "game=2;AAMode=3;gpus=NVIDIA GeForce GTX 1080;files=fsr;FrameCap=4;Shake=2;Fov=125;DoF=0;Cheats=1;Mutators=1",
-    "game=2;Resolution=4;Fullscreen=0;WindowSize=5;Mnk=1;Sens=0.1;DeadZone=5;Vibration=0;Monitor=1;screens=1;HDR=1",
+    "game=2;Resolution=4;Fullscreen=0;WindowSize=5;Mnk=1;Sens=0.1;DeadZoneL=25;DeadZoneR=8;Vibration=0;Monitor=1;screens=1;HDR=1",
+    // GitHub #377: a slider at 1 or more is the stick's whole dead zone - the game's own leaves its bindings
+    "game=0;upd=1;DeadZoneL=5;DeadZoneR=7",        // Gears 2: camera (0.3) and movement (0.3) bindings to 0, both sliders sent
+    "game=0;upd=1;DeadZoneL=0;DeadZoneR=7",        // camera only
+    "game=1;upd=1;DeadZoneL=5;DeadZoneR=7",        // Gears 3: movement only (its camera binding has no dead zone)
+    "game=2;upd=1;DeadZoneL=5;DeadZoneR=0",        // Judgment: movement only
+    "game=0;upd=1;DeadZoneL=5;DeadZoneR=7;Mnk=1",  // keyboard and mouse on: movement binding left alone
     "game=0;AdaptiveTriggers=1;exe=adt;rt=adt",   // GitHub #245, Gears 2: sent
     "game=0;AdaptiveTriggers=1;rt=adt",           // Gears 2 exe without the weapon table: greyed, not sent
     "game=2;AdaptiveTriggers=1;exe=adt;rt=adt",   // Judgment exe without its own weapon table (Gears 3's needle): not sent
     "game=2;AdaptiveTriggers=1;exe=adtg;rt=adt",  // GitHub #245, Judgment: sent
+    // --gow2_patch_skip_coalesced_check: edited Coalesced (engine .ini) files load without the dirty-disc error (Gears 2 only)
+    // GitHub #342: the cheats that are simply on - sent when the exe has them; Gears 3 TU6: all weapons greyed (no cheat manager)
+    "game=0;exe=chx;CheatGod=1;CheatWeapons=1;CheatSpeed=2;CheatHud=1;Cheats=1",
+    "game=0;exe=chx,chk;Cheats=1",   // the cheat keys with the rewritten description (review r342): --gow2_cheats sent
+    "game=3;exe=chk;Cheats=1",       // Gears 1 too
+    "game=1;upd=1;exe=chx;CheatGod=1;CheatWeapons=1;CheatSpeed=3;CheatHud=1",
+    "game=2;exe=chx;CheatGod=1;CheatSpeed=1",
+    "game=3;exe=chx;CheatWeapons=1;CheatHud=1",
+    "game=3;CheatGod=1;CheatWeapons=1;CheatSpeed=2",   // an exe without them: greyed, nothing sent
     "game=2;AdaptiveTriggers=1;exe=adtg",         // Judgment, runtime without patch 98: greyed, not sent
     "game=3;AdaptiveTriggers=1;exe=adtg;rt=adt",  // GitHub #245, Gears 1: sent
     "game=3;AdaptiveTriggers=1;rt=adt",           // Gears 1 exe without the weapon table: greyed, not sent
@@ -216,7 +232,7 @@ std::string random_case(std::mt19937& r) {
     o << ";rt="; sep.clear();
     for (const char* x : { "vs", "lat" }) if (pick(2)) { o << sep << x; sep = ","; }
     o << ";files="; sep.clear();
-    for (const char* x : { "fsr", "dlss", "xess", "fgdll" }) if (pick(2)) { o << sep << x; sep = ","; }
+    for (const char* x : { "fsr", "dlss", "fgdll" }) if (pick(2)) { o << sep << x; sep = ","; }
     if (pick(5) == 0) o << ";extra=--a=1|#x|  --b={LOG}  ";
     for (const Option& op : options(static_cast<Game>(g))) {
         if (pick(3) == 0) continue;   // leave some at the default
@@ -239,6 +255,43 @@ std::string random_case(std::mt19937& r) {
 
 int summary() {
     int fails = 0;
+    // Judgment and Gears 1 HDR must opt into native scene grading as well as HDR presentation.
+    // Cover older ports, HDR off, other games and both native / DLSS selections.
+    {
+        for (int g = 0; g < kGameCount; ++g) for (bool hdr : { false, true })
+        for (bool native : { false, true }) for (bool other_native : { false, true })
+        for (bool ui : { false, true }) for (int aa : { 0, 3 }) {
+            Environment e;
+            const std::string native_flag = g == static_cast<int>(Game::Gears1) ? "gow1_hdr_native" : "gowj_hdr_native";
+            const std::string other_flag = native_flag == "gow1_hdr_native" ? "gowj_hdr_native" : "gow1_hdr_native";
+            e.cap.exe_has = [native, other_native, ui, native_flag, other_flag](const std::string& n) {
+                return (native && n == native_flag) || (other_native && n == other_flag) || (ui && n == "gow2_hdr_ui_automatic") ||
+                       n == "gow2_upscale_mode";
+            };
+            e.cap.file_next_to_exe = [](const std::string& n) { return n == "nvngx_dlss.dll"; };
+            e.gpus = { "NVIDIA GeForce RTX 4090" };
+            const Game game = static_cast<Game>(g);
+            Store st; Settings s = st.view(game, e);
+            s.set("HDR", hdr ? 1 : 0); s.set("AAMode", aa);
+            std::vector<std::string> notes;
+            const auto args = build_args(game, effective_version(game, s, e), s, e, &notes);
+            auto has = [&](const std::string& arg) {
+                return std::find(args.begin(), args.end(), arg) != args.end();
+            };
+            const bool supported_game = game == Game::Judgment || game == Game::Gears1;
+            const bool expected = supported_game && hdr && native;
+            bool warned = false;
+            for (const auto& note : notes) if (note.find("native HDR needs a game build") != std::string::npos) warned = true;
+            if (has("--" + native_flag + "=true") != expected || has("--" + other_flag + "=true") ||
+                has("--gow2_hdr_ui_automatic=true") != (expected && ui) ||
+                has("--present_hdr=true") != hdr || has("--gow2_upscaler=dlss") != (aa == 3) ||
+                warned != (supported_game && hdr && !native) ||
+                has("--gowj_hdr_single_pass=true") || has("--gow2_hdr_compact_targets=true")) {
+                std::cout << "FAIL native HDR launch: game=" << g << " hdr=" << hdr << " native=" << native << " other_native=" << other_native
+                          << " ui=" << ui << " aa=" << aa << "\n"; ++fails;
+            }
+        }
+    }
     const char* gn[3] = { "Gears 2", "Gears 3", "Judgment" };
     for (int g = 0; g < 3; ++g) {
         std::map<std::string, int> per;
@@ -264,7 +317,30 @@ int summary() {
         Environment e; e.update_ready = true;
         Store st; Settings s = st.view(Game::Gears3, e);
         set_value(Game::Gears3, s, "Preset", PresetUltra);
-        if (s.i("Resolution") != 4 || s.i("Preset") != 2) { std::cout << "FAIL preset\n"; ++fails; }
+        if (s.i("Resolution") != 1 || s.i("Preset") != 2) { std::cout << "FAIL preset\n"; ++fails; }
+        // 0.6.6: a saved "Match my monitor" (4) becomes the scale it picked: 1080p / 1440p screens 2x, 4K 3x, unknown 2x
+        for (const auto& c : { std::array<int, 3>{ 1920, 1080, 1 }, std::array<int, 3>{ 2560, 1440, 1 }, std::array<int, 3>{ 3840, 2160, 2 },
+                               std::array<int, 3>{ 1280, 720, 0 }, std::array<int, 3>{ 0, 0, 1 } }) {
+            Environment e2; e2.update_ready = true; e2.monitor_w = c[0]; e2.monitor_h = c[1];
+            Store st2; st2.top["Resolution"] = 4;
+            const Settings s2 = st2.view(Game::Gears2, e2);
+            if (s2.i("Resolution") != c[2]) { std::cout << "FAIL match-my-monitor migration " << c[0] << "x" << c[1] << ": " << s2.i("Resolution") << "\n"; ++fails; }
+        }
+        // 0.6.6: the dropped upscaler (AAMode 4) and frame generation (FrameGen 7) - saved ones become SMAA / AMD's
+        {
+            Environment e3; e3.update_ready = true;
+            Store st3; st3.top["AAMode"] = 4; st3.top["FrameGen"] = 7;
+            const Settings s3 = st3.view(Game::Gears2, e3);
+            if (s3.i("AAMode") != 1 || s3.i("FrameGen") != 1) { std::cout << "FAIL dropped-upscaler migration: AAMode " << s3.i("AAMode") << " FrameGen " << s3.i("FrameGen") << "\n"; ++fails; }
+            if (!framegen_choice_hidden(k_fgDropped, e3)) { std::cout << "FAIL dropped frame generation still listed\n"; ++fails; }
+        }
+        // 0.6.7: Ambient occlusion is Off (0) / Default (1) / On (2) - a saved Off stays Off (GitHub #406), Ultra / CACAO become On
+        for (const auto& c : { std::array<int, 2>{ 0, 0 }, std::array<int, 2>{ 1, 1 }, std::array<int, 2>{ 2, 2 }, std::array<int, 2>{ 3, 2 }, std::array<int, 2>{ 4, 2 } }) {
+            Environment e4; e4.update_ready = true;
+            Store st4; st4.top["AO"] = c[0];
+            const Settings s4 = st4.view(Game::Gears2, e4);
+            if (s4.i("AO") != c[1]) { std::cout << "FAIL AO migration " << c[0] << " -> " << s4.i("AO") << "\n"; ++fails; }
+        }
         set_value(Game::Gears3, s, "Fov", 110);
         if (s.i("Preset") != 3) { std::cout << "FAIL preset -> custom\n"; ++fails; }
         s.set("Sens", 1.7);   // (not "Start": removed in 0.3.0, a saved value is ignored)
@@ -349,6 +425,85 @@ int summary() {
             const std::string want = "--gow2_texture_pack_dirs=\"C:/G/mods/C;C:/G/mods/A\"";
             if (cap && packs ? got != want : !got.empty()) { std::cout << "FAIL texture pack folders (" << got << ")\n"; ++fails; }
         }
+    // GitHub #397: AMD FSR frame generation is not offered on Windows with under 3.5 GB of the card's own video memory
+    // (unknown size and Proton / Wine are left alone), and a saved choice sends nothing there
+    for (int vk = 0; vk <= 1; ++vk)
+        for (int wine = 0; wine <= 1; ++wine)
+            for (unsigned vram : { 0u, 2048u, 3499u, 3500u, 8192u }) {
+                Environment e; e.update_ready = true; e.vram_mb = vram; e.wine = wine != 0;
+                e.cap.exe_has = [](const std::string&) { return true; };
+                e.cap.runtime_has = e.cap.exe_has; e.cap.file_next_to_exe = e.cap.exe_has;
+                const bool want = wine || !vram || vram >= 3500;
+                const Availability av = framegen_choice_available(1, e, vk != 0);
+                if (av.ok != want || (!want && av.why.find("4 GB") == std::string::npos)) {
+                    std::cout << "FAIL frame generation gate (vulkan " << vk << ", wine " << wine << ", vram " << vram
+                              << "): ok " << av.ok << " '" << av.why << "'\n"; ++fails; }
+            }
+    // 0.6.6: Scene resolution choices that the render resolution can't divide are greyed with a reason; Native never is
+    for (int out = 1; out <= 4; ++out)
+        for (int m = 0; m <= 3; ++m) {
+            const Availability av = scene_mode_choice_available(m, out);
+            const bool want = m == 0 || scene_mode_fits(m, out);
+            if (av.ok != want || (!want && av.why.find("render resolution") == std::string::npos)) {
+                std::cout << "FAIL scene mode gate (mode " << m << ", " << out << "x): ok " << av.ok << " '" << av.why << "'\n"; ++fails; }
+        }
+    // 4K + Performance from the true-1080p base: with an exe that can draw 1920x1080 itself, "3x (4K)" with Scene
+    // resolution Performance sends 2x of 1080 lines (the upscaler then gets a 1920x1080 scene) and the choice is not
+    // greyed; every other pairing, and an exe without the switch, is as before. And XeGTAO "On" is at half
+    // resolution only when the 3D scene is drawn at 2x or more - at 1x it gets the full-size High.
+    for (Game g : { Game::Gears1, Game::Gears2, Game::Gears3, Game::Judgment })
+        for (int lines = 0; lines <= 1; ++lines)
+            for (int res = 0; res <= 3; ++res)       // render resolution 1x .. 4x
+                for (int mode = 0; mode <= 3; ++mode) {
+                    Environment e; e.update_ready = true; e.gpus = { "NVIDIA GeForce RTX 4070" };
+                    e.cap.exe_has = [lines](const std::string& n) { return lines || n.find("native_lines") == std::string::npos; };
+                    e.cap.runtime_has = [](const std::string&) { return true; }; e.cap.file_next_to_exe = e.cap.runtime_has;
+                    Store st; Settings s = st.view(g, e);
+                    s.set("Resolution", res); s.set("AAMode", 3); s.set("SceneMode", mode); s.set("AO", 2);
+                    const std::vector<std::string> a = build_args(g, effective_version(g, s, e), s, e, nullptr);
+                    auto has = [&](const std::string& v) { for (const std::string& x : a) if (x == v) return true; return false; };
+                    auto starts = [&](const std::string& v) { for (const std::string& x : a) if (x.rfind(v, 0) == 0) return true; return false; };
+                    const int out = res + 1;
+                    const bool base1080 = performance_1080_base(g, s, e);
+                    const bool perf = lines && out == 3 && mode == 2;
+                    const bool fits = scene_mode_fits(mode, out);
+                    const int scene = perf ? 1 : !fits ? out : mode == 1 ? 2 : mode == 2 ? out / 2 : 1;
+                    const bool gtao = has("--gow2_ao=gtao");
+                    std::string why;
+                    if (base1080 != (lines != 0)) why = "performance_1080_base";
+                    else if (has("--gow2_renderer_resolution_scale=" + std::to_string(perf ? 2 : out)) == false) why = "render scale";
+                    else if (starts("--gow") && (has("--gow2_renderer_edram_extended=true") != perf)) why = "extended EDRAM";
+                    else if ((starts("--gow2_native_lines=1080") || starts("--gow3_native_lines=1080") ||
+                              starts("--gowj_native_lines=1080") || starts("--gow1_native_lines=1080")) != perf) why = "native lines";
+                    else if (mode && has("--gow2_upscale_mode=performance") != (mode == 2)) why = "upscale mode";
+                    else if (scene_mode_choice_available(mode, out, base1080).ok != (mode == 0 || fits || perf)) why = "choice gate";
+                    else if (gtao && has("--gow2_ao_half=true") != (scene >= 2)) why = "XeGTAO half resolution";
+                    else if (gtao && has("--gow2_ao_denoise=2") != (scene < 2)) why = "XeGTAO full-size High";
+                    if (!why.empty()) {
+                        std::cout << "FAIL 4K Performance / AO half (" << why << "): game " << static_cast<int>(g) << ", lines " << lines
+                                  << ", " << out << "x, mode " << mode << ", scene " << scene << "x\n"; ++fails; }
+                }
+    // GitHub #436: 768p and 900p are the true-lines path at 768 / 900 lines with an exe that has it, and the upscaled
+    // 720p (as the old 1080p) without; a 1366 x 768 window sends that size
+    for (Game g : { Game::Gears1, Game::Gears2, Game::Gears3, Game::Judgment })
+        for (int lines = 0; lines <= 1; ++lines)
+            for (int res : { 6, 7 }) {
+                Environment e; e.update_ready = true;
+                e.cap.exe_has = [lines](const std::string& n) { return lines || n.find("native_lines") == std::string::npos; };
+                e.cap.runtime_has = [](const std::string&) { return true; }; e.cap.file_next_to_exe = e.cap.runtime_has;
+                Store st; Settings s = st.view(g, e);
+                s.set("Resolution", res); s.set("Fullscreen", 0); s.set("WindowSize", 6);
+                const std::vector<std::string> a = build_args(g, effective_version(g, s, e), s, e, nullptr);
+                auto has = [&](const std::string& v) { for (const std::string& x : a) if (x == v) return true; return false; };
+                static const char* const k_nl[4] = { "gow2", "gow3", "gowj", "gow1" };
+                const std::string want = std::string("--") + k_nl[static_cast<int>(g)] + "_native_lines=" + (res == 6 ? "768" : "900");
+                std::string why;
+                if (has(want) != (lines != 0)) why = "native lines";
+                else if (has("--gow2_present_upscale_filter=lanczos") == (lines != 0)) why = "upscaled fallback";
+                else if (!has("--gow2_renderer_resolution_scale=1")) why = "render scale";
+                else if (!has("--window_width=1366") || !has("--window_height=768")) why = "1366 x 768 window";
+                if (!why.empty()) { std::cout << "FAIL #436 768p / 900p (" << why << "): game " << static_cast<int>(g) << ", lines " << lines << ", choice " << res << "\n"; ++fails; }
+            }
     // 0.6.4 (GitHub #341): the texture cache - Auto sends nothing (512) without a texture pack and 2048 with one; a size
     // other than 512 is sent as picked; nothing for an exe without the cvar
     for (Game g : { Game::Gears1, Game::Gears2, Game::Gears3, Game::Judgment })
@@ -413,6 +568,91 @@ int summary() {
             if (on ? !all : any) { std::cout << "FAIL net rates for game " << static_cast<int>(g) << " (" << (on ? "on" : "off") << ")\n"; ++fails; }
         }
     }
+    for (int has = 0; has < 2; ++has) {   // 0.6.5: Horde bots on Gears 3 also send the bot-characters fix when gow3.exe has it
+        Environment e; e.update_ready = true;
+        if (has) e.cap.exe_has = [](const std::string&) { return true; };
+        else e.cap.exe_has = [](const std::string& k) { return k != "gow3_horde_bot_characters"; };
+        e.cap.runtime_has = [](const std::string&) { return true; }; e.cap.file_next_to_exe = e.cap.runtime_has;
+        Store st; Settings s = st.view(Game::Gears3, e);
+        s.set("HordeBots", 1);
+        const std::vector<std::string> a = build_args(Game::Gears3, Version::TitleUpdate, s, e, nullptr);
+        const bool hb = std::find(a.begin(), a.end(), "--gow3_horde_bots=true") != a.end();
+        const bool hc = std::find(a.begin(), a.end(), "--gow3_horde_bot_characters=true") != a.end();
+        if (!hb || hc != (has == 1)) { std::cout << "FAIL horde bot characters: exe has it " << has << ", bots " << hb << ", characters " << hc << "\n"; ++fails; }
+        s.set("HordeBots", 0);
+        const std::vector<std::string> b = build_args(Game::Gears3, Version::TitleUpdate, s, e, nullptr);
+        if (std::find(b.begin(), b.end(), "--gow3_horde_bot_characters=true") != b.end()) { std::cout << "FAIL horde bot characters sent with Horde bots off\n"; ++fails; }
+    }
+    {   // 0.6.5: a gow1.exe without --gow1_no_aspect_lock keeps the option off (it would letterbox)
+        Environment e; e.update_ready = true;
+        e.cap.exe_has = [](const std::string& k) { return k != "gow1_no_aspect_lock"; };
+        e.cap.runtime_has = [](const std::string&) { return true; }; e.cap.file_next_to_exe = e.cap.runtime_has;
+        e.monitor_w = 1280; e.monitor_h = 800;
+        Store st; Settings s = st.view(Game::Gears1, e);
+        s.set("AspectRatio", 3);
+        const std::vector<std::string> a = build_args(Game::Gears1, Version::TitleUpdate, s, e, nullptr);
+        if (std::find(a.begin(), a.end(), "--video_mode_width=1152") != a.end()) { std::cout << "FAIL 16:10 old gow1.exe\n"; ++fails; }
+    }
+    // 0.6.5 16:10: Aspect ratio 16:10 (index 3, added last) sends a 1152x720 non-widescreen mode; Auto does on a 16:10
+    // screen (1280x800 / 1920x1200) and not on 16:9 (1920x1080) or 21:9 (3440x1440); 16:9 sends no mode; Gears 1 also gets --gow1_no_aspect_lock
+    for (Game g : { Game::Gears2, Game::Gears3, Game::Judgment, Game::Gears1 }) {
+        struct Case { int ar, w, h; bool want; } cases[] = {
+            { 3, 1920, 1080, true }, { 0, 1280, 800, true }, { 0, 1920, 1200, true }, { 0, 1920, 1080, false },
+            { 0, 3440, 1440, false }, { 0, 0, 0, false }, { 1, 1280, 800, false } };
+        for (const Case& k : cases) {
+            Environment e; e.update_ready = true;
+            e.cap.exe_has = [](const std::string&) { return true; };
+            e.cap.runtime_has = e.cap.exe_has; e.cap.file_next_to_exe = e.cap.exe_has;
+            e.monitor_w = k.w; e.monitor_h = k.h;
+            Store st; Settings s = st.view(g, e);
+            s.set("AspectRatio", k.ar);
+            const std::vector<std::string> a = build_args(g, Version::TitleUpdate, s, e, nullptr);
+            auto has = [&](const std::string& v) { return std::find(a.begin(), a.end(), v) != a.end(); };
+            const bool want = k.want;
+            const bool sent = has("--video_mode_width=1152") && has("--video_mode_height=720") && has("--video_mode_widescreen=false");
+            const bool any = has("--video_mode_width=1152") || has("--video_mode_widescreen=false");
+            if (g == Game::Gears1 && has("--gow1_no_aspect_lock=true") != want) {
+                std::cout << "FAIL 16:10 Gears 1 lock: choice " << k.ar << " screen " << k.w << "x" << k.h << "\n"; ++fails;
+            }
+            if (g != Game::Gears1 && has("--gow1_no_aspect_lock=true")) { std::cout << "FAIL 16:10 lock sent to game " << static_cast<int>(g) << "\n"; ++fails; }
+            if (want ? !sent : any) {
+                std::cout << "FAIL 16:10 args: game " << static_cast<int>(g) << " choice " << k.ar << " screen " << k.w << "x" << k.h << "\n";
+                ++fails;
+            }
+        }
+    }
+    // 0.6.5 stick dead zones: one slider per stick, 1 % steps; the old 6-step "DeadZone" choice read into both sliders
+    {
+        Environment e; e.update_ready = true;
+        e.cap.exe_has = [](const std::string&) { return true; };
+        e.cap.runtime_has = e.cap.exe_has; e.cap.file_next_to_exe = e.cap.exe_has;
+        Store st; Settings s = st.view(Game::Gears2, e);
+        s.set("DeadZoneL", 12); s.set("DeadZoneR", 0);
+        const std::vector<std::string> a = build_args(Game::Gears2, Version::TitleUpdate, s, e, nullptr);
+        auto has = [&](const std::string& v) { return std::find(a.begin(), a.end(), v) != a.end(); };
+        bool right = false;
+        for (const std::string& x : a) right = right || x.rfind("--right_stick_deadzone_percentage", 0) == 0;
+        if (!has("--left_stick_deadzone_percentage=0.12") || right) { std::cout << "FAIL per-stick dead zone args\n"; ++fails; }
+        Store old;
+        old.load_ini("[General]\nDeadZone=3\n");
+        const Settings o = old.view(Game::Gears3, e);
+        if (o.i("DeadZoneL") != 15 || o.i("DeadZoneR") != 15) { std::cout << "FAIL old DeadZone choice not moved to both sliders\n"; ++fails; }
+        Store both;
+        both.load_ini("[General]\nDeadZoneL=7\nDeadZone=3\nDeadZoneR=9\n");
+        const Settings b = both.view(Game::Gears3, e);
+        if (b.i("DeadZoneL") != 7 || b.i("DeadZoneR") != 9) { std::cout << "FAIL saved sliders overridden by the old choice\n"; ++fails; }
+        // GitHub #377: a saved "Radial stick dead zone" choice (3 = 16 %) moves to the right slider unless that is set
+        Store rad;
+        rad.load_ini("[General]\nRadialDZ=3\n");
+        const Settings rs = rad.view(Game::Gears2, e);
+        if (rs.i("DeadZoneR") != 16 || rs.i("DeadZoneL") != 0) { std::cout << "FAIL old radial choice not moved to the right slider\n"; ++fails; }
+        Store rad2;
+        rad2.load_ini("[General]\nRadialDZ=3\nDeadZoneR=9\n");
+        if (rad2.view(Game::Gears2, e).i("DeadZoneR") != 9) { std::cout << "FAIL saved right slider overridden by the old radial choice\n"; ++fails; }
+        if (rad.save_ini().find("RadialDZ") != std::string::npos) { std::cout << "FAIL old radial choice written back\n"; ++fails; }
+        const std::string saved = old.save_ini();
+        if (saved.find("DeadZoneL=15") == std::string::npos || saved.find("\nDeadZone=") != std::string::npos) { std::cout << "FAIL dead zone save\n"; ++fails; }
+    }
     // Ping in the FPS bar: Show ping sends --cogbox_show_ping=true (the exe must know it); off sends nothing
     for (int on = 0; on <= 1; ++on) {
         Environment e; e.update_ready = true;
@@ -424,6 +664,38 @@ int summary() {
         bool has = false;
         for (const std::string& x : build_args(Game::Gears3, Version::TitleUpdate, s, e, nullptr)) has = has || x == "--cogbox_show_ping=true";
         if (has != (on != 0)) { std::cout << "FAIL show ping arg (" << on << ")\n"; ++fails; }
+    }
+    // In-match chat (Y / U): an option in every game, on by default; sends --cogbox_match_chat=true / false to an exe
+    // that knows it, nothing to one that doesn't
+    for (int g = 0; g < 4; ++g) {
+        const Option* o = find_option(static_cast<Game>(g), "MatchChat");
+        if (!o || o->label != "In-match chat" || o->def != 1) { std::cout << "FAIL MatchChat option, game " << g << "\n"; ++fails; }
+    }
+    for (int on = 0; on <= 2; ++on) {   // 2: an exe without the option
+        Environment e; e.update_ready = true;
+        e.cap.exe_has = [on](const std::string&) { return on != 2; };
+        e.cap.runtime_has = e.cap.exe_has; e.cap.file_next_to_exe = e.cap.exe_has;
+        Store st; Settings s = st.view(Game::Gears2, e);
+        s.set("MatchChat", on == 1 ? 1 : 0);
+        std::string got;
+        for (const std::string& x : build_args(Game::Gears2, Version::TitleUpdate, s, e, nullptr))
+            if (x.rfind("--cogbox_match_chat=", 0) == 0) got = x;
+        const std::string want = on == 2 ? "" : on ? "--cogbox_match_chat=true" : "--cogbox_match_chat=false";
+        if (got != want) { std::cout << "FAIL match chat arg (" << on << "): '" << got << "'\n"; ++fails; }
+    }
+    // In-match chat background: Dark see-through (default) / None -> --cogbox_match_chat_background=dark / none
+    for (int bg = 0; bg <= 1; ++bg) {
+        Environment e; e.update_ready = true;
+        e.cap.exe_has = [](const std::string&) { return true; };
+        e.cap.runtime_has = e.cap.exe_has; e.cap.file_next_to_exe = e.cap.exe_has;
+        Store st; Settings s = st.view(Game::Gears1, e);
+        const Option* o = find_option(Game::Gears1, "MatchChatBackground");
+        if (!o || o->label != "Chat background" || o->def != 0) { std::cout << "FAIL MatchChatBackground option\n"; ++fails; break; }
+        s.set("MatchChatBackground", bg);
+        bool has = false;
+        const std::string want = bg ? "--cogbox_match_chat_background=none" : "--cogbox_match_chat_background=dark";
+        for (const std::string& x : build_args(Game::Gears1, Version::TitleUpdate, s, e, nullptr)) has = has || x == want;
+        if (!has) { std::cout << "FAIL match chat background arg (" << bg << ")\n"; ++fails; }
     }
     // social step 4: Gears 3 TU6 gets its UE3 GNames / GEngine addresses (the private match lobby fixes), others not
     for (int gi = 0; gi < 2; ++gi) {
@@ -599,10 +871,10 @@ int summary() {
         const int G2 = static_cast<int>(Game::Gears2), G3 = static_cast<int>(Game::Gears3), GJ = static_cast<int>(Game::Judgment);
         const int fs3 = pages[G3].i("Fullscreen"), fs2 = pages[G2].i("Fullscreen");
         // Gears 3 (open page, unsaved): Vibration off, a graphics card, Extra dead zone 2, its own display mode
-        pages[G3].set("Vibration", 0); pages[G3].t["GraphicsCard"] = "NVIDIA GeForce RTX 4090"; pages[G3].set("DeadZone", 2);
+        pages[G3].set("Vibration", 0); pages[G3].t["GraphicsCard"] = "NVIDIA GeForce RTX 4090"; pages[G3].set("DeadZoneL", 2);
         pages[G3].set("Fullscreen", fs3 == 0 ? 1 : 0);
         // Gears 2 (in-game menu, then Restart to apply): mouse sensitivity and Extra dead zone 4
-        pages[G2].set("Sens", 1.2); pages[G2].set("DeadZone", 4);
+        pages[G2].set("Sens", 1.2); pages[G2].set("DeadZoneL", 4);
         bool dirty[kGameCount] = {}; dirty[G2] = dirty[G3] = true;
         bool changed[kGameCount] = {};
         sync_shared(st, envs, pages, dirty, G2, changed);
@@ -610,7 +882,7 @@ int summary() {
         for (int g : { G2, G3, GJ }) {
             if (pages[g].i("Vibration") != 0 || pages[g].f("Sens") != 1.2 || pages[g].str("GraphicsCard") != "NVIDIA GeForce RTX 4090")
                 bad("edits of both pages on game " + std::to_string(g));
-            if (pages[g].i("DeadZone") != 4) bad("the saved page wins on game " + std::to_string(g));
+            if (pages[g].i("DeadZoneL") != 4) bad("the saved page wins on game " + std::to_string(g));
         }
         if (pages[G2].i("Fullscreen") != fs2 || pages[G3].i("Fullscreen") == fs3) bad("PerGame value moved");
         if (!changed[G2] || !changed[G3] || !changed[GJ]) bad("changed flags");
@@ -619,7 +891,7 @@ int summary() {
         for (bool c : again) if (c) bad("second sync changed something");
         st.commit(Game::Gears2, pages[G2], envs[G2]); st.commit(Game::Gears3, pages[G3], envs[G3]);   // either order keeps it
         const Settings g1 = st.view(Game::Gears1, envs[static_cast<int>(Game::Gears1)]);
-        if (g1.i("Vibration") != 0 || g1.f("Sens") != 1.2 || g1.i("DeadZone") != 4) bad("store after both commits");
+        if (g1.i("Vibration") != 0 || g1.f("Sens") != 1.2 || g1.i("DeadZoneL") != 4) bad("store after both commits");
         // nothing unsaved: nothing moves
         bool none[kGameCount] = {};
         Settings fresh[kGameCount];
@@ -673,13 +945,13 @@ int summary() {
         // 2. the page being saved changes Extra dead zone and back: not an edit, so Gears 3's unsaved 2 is kept (by design)
         {
             auto w = world(1, 0);
-            const int dz = w->pages[G2].i("DeadZone"), other = dz == 2 ? 3 : 2;
-            w->pages[G2].set("DeadZone", dz + 1); w->pages[G2].set("DeadZone", dz); w->pages[G2].set("Sens", 0.7);
+            const int dz = w->pages[G2].i("DeadZoneL"), other = dz == 2 ? 3 : 2;
+            w->pages[G2].set("DeadZoneL", dz + 1); w->pages[G2].set("DeadZoneL", dz); w->pages[G2].set("Sens", 0.7);
             w->dirty[G2] = true;
-            w->pages[G3].set("DeadZone", other); w->dirty[G3] = true;
+            w->pages[G3].set("DeadZoneL", other); w->dirty[G3] = true;
             sync_shared(w->st, w->envs, w->pages, w->dirty, G2, w->changed);
             for (int g = 0; g < kGameCount; ++g)
-                if (w->pages[g].i("DeadZone") != other || w->pages[g].f("Sens") != 0.7) bad("reverted edit on game " + std::to_string(g));
+                if (w->pages[g].i("DeadZoneL") != other || w->pages[g].f("Sens") != 0.7) bad("reverted edit on game " + std::to_string(g));
         }
         // 3. two unsaved pages with different graphics cards: the page being saved wins either way round
         for (int prefer : { G3, GJ }) {
@@ -753,6 +1025,133 @@ int summary() {
             if (st.view(static_cast<Game>(g), envs[g]).i("TriggerRumble") != 1) bad("not shared to game " + std::to_string(g));
         Store st2; st2.load_ini(st.save_ini());
         if (st2.view(Game::Gears1, envs[static_cast<int>(Game::Gears1)]).i("TriggerRumble") != 1) bad("ini round trip");
+    }
+    // GitHub #425: the AUDIO tab - Output device, Speaker setup, Night mode (the runtime's switches, SDK patch 117) and the
+    // Mute option moved there with its id. Each switch only when it isn't the runtime's default and the runtime has it.
+    {
+        auto bad = [&](const std::string& w) { std::cout << "FAIL audio tab: " << w << "\n"; ++fails; };
+        static_assert(Tab::Gameplay < Tab::Audio && Tab::Audio < Tab::Achievements, "AUDIO between GAMEPLAY and ACHIEVEMENTS");
+        if (std::string(tab_name(Tab::Audio)) != "Audio") bad("tab name");
+        const std::string speakers = "Speakers (Realtek(R) Audio)", headset = "Headset Earphone (USB Audio)";
+        static const char* const needles[3] = { "The sound output device, by its name as Windows lists it",
+                                                "Speaker setup: 0 = automatic",
+                                                "Night mode: a gentle compressor on the game's sound" };
+        for (int g = 0; g < kGameCount; ++g) {
+            const Game game = static_cast<Game>(g);
+            const std::string gs = " (game " + std::to_string(g) + ")";
+            const Option* dev = find_option(game, "AudioDevice");
+            const Option* ch = find_option(game, "AudioChannels");
+            const Option* nm = find_option(game, "NightMode");
+            const Option* mu = find_option(game, "Mute");
+            if (!dev || dev->kind != Kind::Text || dev->scope != Scope::Shared || dev->tab != Tab::Audio || dev->label != "Output device")
+                bad("Output device option" + gs);
+            if (!ch || ch->kind != Kind::Choice || ch->scope != Scope::Shared || ch->tab != Tab::Audio || ch->def != 0 ||
+                ch->choices.size() != 5 || ch->label != "Speaker setup")
+                bad("Speaker setup option" + gs);
+            if (!nm || nm->kind != Kind::Bool || nm->scope != Scope::Shared || nm->tab != Tab::Audio || nm->def != 0 || nm->label != "Night mode")
+                bad("Night mode option" + gs);
+            if (!mu || mu->tab != Tab::Audio || std::string(tab_name(mu->tab)) != "Audio") bad("Mute not on the Audio tab" + gs);
+            if (!dev || !ch || !nm) continue;
+            // rt / exe: the runtime DLL / the exe has the three switches' descriptions; devices: the PC's output devices
+            auto run = [&](bool rt, bool exe, const std::vector<std::string>& devices, const std::string& device, int channels,
+                           bool night, std::vector<std::string>* notes = nullptr) {
+                Environment e; e.update_ready = true; e.audio_devices = devices;
+                auto has = [](const std::string& n) { for (const char* x : needles) if (n == x) return true; return false; };
+                e.cap.exe_has = [exe, has](const std::string& n) { return exe && has(n); };
+                e.cap.runtime_has = [rt, has](const std::string& n) { return rt && has(n); };
+                e.cap.file_next_to_exe = [](const std::string&) { return false; };
+                Store st; st.texts["AudioDevice"] = device;
+                Settings s = st.view(game, e);
+                s.set("AudioChannels", channels); s.set("NightMode", night ? 1 : 0);
+                std::vector<std::string> out;
+                for (const std::string& x : build_args(game, effective_version(game, s, e), s, e, notes))
+                    if (x.find("audio_") != std::string::npos) out.push_back(x);
+                return out;
+            };
+            const std::vector<std::string> pc = { speakers, headset };
+            if (!run(true, false, pc, "", 0, false).empty()) bad("the defaults send something" + gs);
+            static const char* const k_ch[5] = { "", "--audio_channels=1", "--audio_channels=2", "--audio_channels=6", "--audio_channels=8" };
+            for (int c = 1; c < 5; ++c) {
+                const auto a = run(true, false, pc, "", c, false);
+                if (a.size() != 1 || a[0] != k_ch[c]) bad("Speaker setup " + std::to_string(c) + gs);
+            }
+            {
+                const auto a = run(true, false, pc, "", 0, true);
+                if (a.size() != 1 || a[0] != "--audio_night_mode=true") bad("Night mode" + gs);
+            }
+            {
+                const auto a = run(true, false, pc, headset, 0, false);
+                if (a.size() != 1 || a[0] != "--audio_output_device=\"" + headset + "\"") bad("Output device not sent" + gs);
+                const auto lower = run(true, false, pc, "speakers (realtek(r) audio)", 0, false);
+                if (lower.size() != 1 || lower[0] != "--audio_output_device=\"speakers (realtek(r) audio)\"") bad("Output device case" + gs);
+            }
+            {
+                // review: a device the launcher doesn't see now is still sent (the runtime falls back to the default
+                // device itself), with no note in args.txt - only the AUDIO tab says it is missing
+                std::vector<std::string> notes;
+                const auto a = run(true, false, { speakers }, headset, 0, false, &notes);
+                bool noted = false;
+                for (const std::string& n : notes) if (n.find("Output device") != std::string::npos) noted = true;
+                if (a.size() != 1 || a[0] != "--audio_output_device=\"" + headset + "\"" || noted)
+                    bad("a device not plugged in now is not sent, or noted" + gs);
+                const auto none = run(true, false, {}, headset, 0, false);
+                if (none.size() != 1) bad("Output device not sent without a device list" + gs);
+            }
+            {
+                const auto a = run(false, true, pc, headset, 4, true);   // a game linked with the runtime: the exe has them
+                if (a.size() != 3) bad("switches in the exe not sent" + gs);
+            }
+            // an older build: all three greyed with the short reason, nothing sent
+            if (!run(false, false, pc, headset, 4, true).empty()) bad("sent to a build without the switches" + gs);
+            {
+                Environment e; e.update_ready = true;
+                e.cap.exe_has = [](const std::string&) { return false; };
+                e.cap.runtime_has = e.cap.exe_has; e.cap.file_next_to_exe = e.cap.exe_has;
+                Store st; Settings s = st.view(game, e);
+                for (const Option* o : { dev, ch, nm }) {
+                    const Availability av = available(*o, game, Version::TitleUpdate, s, e);
+                    if (av.ok || av.why != "Needs a newer COGBox build.") bad("not greyed on an older build: " + o->id + gs);
+                }
+                Environment full = e;
+                full.cap.runtime_has = [](const std::string& n) { for (const char* x : needles) if (n == x) return true; return false; };
+                for (const Option* o : { dev, ch, nm })
+                    if (!available(*o, game, Version::TitleUpdate, s, full).ok) bad("greyed with the switches: " + o->id + gs);
+                // live in the in-game menu: night mode only (the device and the speakers are chosen when the sound starts)
+                s.set("NightMode", 1);
+                const auto live = live_lines(game, Version::TitleUpdate, s, full);
+                if (!live.count("NightMode") || live.count("AudioChannels") || live.count("AudioDevice")) bad("live lines" + gs);
+            }
+        }
+        // one value for all four games; the device kept by name in the ini; a Mute=1 saved before the move still loads
+        Environment envs[kGameCount];
+        for (Environment& e : envs) { e.update_ready = true; e.audio_devices = { speakers, headset }; }
+        Store st;
+        Settings g3 = st.view(Game::Gears3, envs[1]);
+        g3.t["AudioDevice"] = headset; g3.set("AudioChannels", 2); g3.set("NightMode", 1);
+        st.commit(Game::Gears3, g3, envs[1]);
+        for (int g = 0; g < kGameCount; ++g) {
+            const Settings v = st.view(static_cast<Game>(g), envs[g]);
+            if (v.str("AudioDevice") != headset || v.i("AudioChannels") != 2 || v.i("NightMode") != 1) bad("not shared to game " + std::to_string(g));
+        }
+        const std::string ini = st.save_ini();
+        Store st2; st2.load_ini(ini);
+        if (st2.view(Game::Gears1, envs[3]).str("AudioDevice") != headset || st2.save_ini() != ini ||
+            ini.find("AudioDevice=" + headset) == std::string::npos) bad("ini round trip");
+        Store st3; st3.load_ini("[General]\nMute=1\n");
+        if (st3.view(Game::Gears2, envs[0]).i("Mute") != 1) bad("a saved Mute=1 is lost");
+        Store st4;
+        if (!st4.view(Game::Gears2, envs[0]).str("AudioDevice").empty()) bad("Output device default");
+        const Option* dev = find_option(Game::Gears2, "AudioDevice");
+        if (dev && sanitize_text(*dev, "  Speakers \"Front\"\t(USB)\n ") != "Speakers Front(USB)") bad("Output device sanitise");
+        // present: compared as saved (sanitised) and in any case - a listed name with quotes matches the saved one
+        {
+            Environment e; e.audio_devices = { "Speakers \"Front\" (USB)", headset };
+            if (!audio_device_present(e, "Speakers Front (USB)")) bad("present: a listed name with quotes");
+            if (!audio_device_present(e, "headset earphone (usb audio)")) bad("present: any case");
+            if (audio_device_present(e, "Headset") || audio_device_present(e, "")) bad("present: part of a name or empty");
+            e.audio_devices.clear();
+            if (audio_device_present(e, headset)) bad("present: an empty list");
+        }
     }
     std::cout << (fails ? "SELF-CHECKS FAILED\n" : "self-checks ok\n");
     return fails ? 1 : 0;

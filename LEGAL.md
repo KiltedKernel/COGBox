@@ -16,7 +16,7 @@ Gears of War games.
 ## 2. Trademarks
 
 "Gears of War", "Xbox" and "Xbox 360" are trademarks of Microsoft.
-"Unreal" is a trademark of Epic Games. NVIDIA, DLSS, AMD, FidelityFX, FSR, Intel, XeSS and ReShade are trademarks of their
+"Unreal" is a trademark of Epic Games. NVIDIA, DLSS, AMD, FidelityFX, FSR and ReShade are trademarks of their
 owners. All other trademarks belong to their owners. We use these names only to say which games and hardware COGBox
 works with. Their use doesn't mean any of these companies endorse or support COGBox.
 
@@ -71,7 +71,7 @@ as far as the law allows.
 COGBox includes components made by others, each under its own licence: among them code from the Xenia projects and
 the rexglue SDK (BSD-3-Clause), Dear ImGui, SDL3, miniz, stb and the LZMA SDK, FFmpeg's XMA decoder (LGPL 2.1, as
 separate DLLs, with its source offered as `licenses\FFmpeg-NOTICE.txt` says), the vendors' upscaler and graphics
-libraries (NVIDIA DLSS / Streamline / Reflex, AMD FidelityFX / Anti-Lag, Intel XeSS), Microsoft's DirectX Shader
+libraries (NVIDIA DLSS / Streamline / Reflex, AMD FidelityFX / Anti-Lag), Microsoft's DirectX Shader
 Compiler and Direct3D 12 Agility SDK, and fonts under the SIL Open Font License. Their licence texts are in the release's
 `licenses` folders and in `THIRD_PARTY_NOTICES.md`. Those licences, not this page, govern those components. Vendor
 libraries are redistributed under the vendors' redistribution terms; their names are their owners' trademarks.
@@ -95,8 +95,8 @@ them on and off, orders them, updates them and uninstalls them.
   a zip, but it doesn't review, approve or vouch for any mod, and a clean check isn't a legal clearance.
 - **Mods are used at your own risk** (see sections 6 to 8). A mod isn't made, checked or endorsed by COGBox.
 - **Program files are left out of installs.** A mod is data for the game, not a program: files that Windows runs
-  (programs and libraries, scripts, installers, shortcuts and similar) and archives inside the mod are never copied into
-  the mods folder, and the install tells you which were left out. This is a safety measure, not a guarantee that a mod
+  (programs and libraries, scripts, installers, shortcuts and similar) and the archives and disk images COGBox
+  recognises inside the mod are not copied into the mods folder, and the install tells you which were left out. This is a safety measure, not a guarantee that a mod
   is safe.
 - **Mods from Nexus Mods** (test builds only, until Nexus Mods approves COGBox's app; not in any release yet) are
   hosted by Nexus Mods and are subject to Nexus Mods' terms and the mod author's. COGBox only shows them and, when you

@@ -3,7 +3,11 @@
 // Fabricator's Creator check lists them as problems, because a clean package must not contain them.
 //   exe dll xex xexp bat cmd ps1 psm1 vbs vbe js jse wsf wsh msi msp mst scr com lnk url pif hta reg asi sys cpl ocx jar
 //   appx msix appxbundle msixbundle scf inf chm gadget application settingcontent-ms msc, and the nested archives
-//   zip 7z rar cab (a program could hide inside one).
+//   zip 7z rar cab (a program could hide inside one); since review r369 also ax drv efi mui ps1xml psd1 psc1 psc2
+//   msh msh1 msh2 mshxml msh1xml msh2xml ws wsc sct vb appref-ms library-ms search-ms searchconnector-ms msu diagcab
+//   appinstaller jnlp xll xbap website, and the archives / disk images tar gz tgz bz2 tbz2 xz txz lz lzma zst arj lzh
+//   ace iso img vhd vhdx wim dmg; and (the security audit) Office files (macro and legacy forms), one, themes, rdp, Python,
+//   htm html xhtml mht mhtml svg, Access databases, certificates, iqy slk, and the Linux launchers desktop sh.
 #pragma once
 #include <string>
 #include <vector>

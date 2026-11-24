@@ -8,6 +8,7 @@
 #include "app.h"
 #include "social_client.h"
 #include "fabricator_state.h"   // the FABRICATOR screen's worker and jobs
+#include "mod_conflicts.h"   // its worker stopped at exit
 #include "theme.h"
 #include "i18n.h"   // 0.2.0
 #include "update.h"
@@ -85,7 +86,21 @@ static bool zip_skip_dir(const std::string &name)
 {
     return _stricmp(name.c_str(), "00000002") == 0 || _stricmp(name.c_str(), "000B0000") == 0;   // DLC, title update
 }
+static bool zip_folder_to(const std::string &dir, const std::string &zipPath, std::string &err, int &files);
+// 0.6.6 (review #21): written as <name>.partial and renamed once finished, so a zip under the final name is always a
+// whole one (closing COGBox mid-backup used to leave a cut-off zip that looked complete)
 static bool zip_folder(const std::string &dir, const std::string &zipPath, std::string &err, int &files)
+{
+    const std::string part = zipPath + ".partial";
+    if (!zip_folder_to(dir, part, err, files)) return false;
+    if (!MoveFileExW(widen(part).c_str(), widen(zipPath).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(widen(part).c_str());
+        err = "couldn't rename the finished backup to " + zipPath;
+        return false;
+    }
+    return true;
+}
+static bool zip_folder_to(const std::string &dir, const std::string &zipPath, std::string &err, int &files)
 {
     HANDLE h = CreateFileW(widen(zipPath).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) { err = "couldn't create " + zipPath; return false; }
@@ -245,6 +260,11 @@ static void answered(App &a)
     else if (m.tag == "autoset" && m.answer == 0) auto_settings_apply(a, m.game);   // Shagg 29 Oct
     else if (m.tag == "protonrec" || m.tag == "protonfound") linux_answer(a, m);   // proton049
     else if (m.tag == "tumismatch" && m.answer == 0) { a.tuMismatchOk[m.game] = true; play_start(a, m.game); }
+    else if (m.tag == "coldprep") {   // 0.6.5: the cold-start question (play.cpp); closing it starts nothing
+        if (m.answer == 0) { a.prepThenPlay[m.game] = true; play_start(a, m.game, true); }
+        else if (m.answer == 1) { a.coldPrepOk[m.game] = true; play_start(a, m.game); }
+        else if (m.answer == 2) { a.ini.seti("Graphics", "AutoPrepareAsk", 0); a.ini.save(); a.coldPrepOk[m.game] = true; play_start(a, m.game); }
+    }
     else if (m.tag == "tumismatch") a.joinLobby[m.game].clear();   // 0.6.0: Cancel drops a pending Join
     else if (m.tag == "foundsaves") {   // 0.6.4: hand-copied saves; Not now, or a done import, then starts the game
         bool start = true;
@@ -869,6 +889,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (getenv("COGBOX_BORDERLESS")) { a.borderless = true; SDL_SetWindowBordered(win, false); }   // test switch (not saved)
     a.gpus = report_gpu_names();
     a.gpuCards = report_gpu_cards();   // 0.6.2 (GitHub #304)
+    audio_devices_refresh(a, true);   // GitHub #425 (again when the AUDIO tab opens and at Play)
     a.proton = proton::detect_here(a.gpus);   // proton049: Proton version, SteamOS, Steam Deck model (empty on Windows)
     a.hasAvx2 = cpu_has_avx2();
     refresh_games(a, true);
@@ -891,7 +912,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (const char *t = getenv("COGBOX_PAGE")) {
         a.page = std::max(0, std::min(G_ALL - 1, atoi(t)));
         const char *c = strchr(t, ':');
-        a.tab = c ? std::max(0, std::min(7, atoi(c + 1))) : 0;   // 0-4 gs::Tab, 5 SOCIAL, 6 MODS, 7 ABOUT
+        a.tab = c ? std::max(0, std::min(kTabCount - 1, atoi(c + 1))) : 0;   // 0-5 gs::Tab, 6 SOCIAL, 7 MODS, 8 ABOUT
         a.screen = a.zoomTo = SCR_PAGE;
     }
     if (const char *t = getenv("COGBOX_FABRICATOR")) {   // test switch: only picks the screen and its tab
@@ -921,7 +942,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         for (int g = 0; g < G_ALL; g++) {
             if (g_playArg != game_def(g).key) continue;
             a.front = g; a.carPos = (float)std::max(0, library_slot(a, g));
-            if (a.st[g].ready == R_READY && !a.modal.open) play_start(a, g);
+            // 0.6.6 (GitHub #374): a front end (Playnite, Steam) that starts COGBox with --play waits for COGBox to
+            // close; when the game ends normally COGBox closes too. A crash keeps it open to show what happened.
+            if (a.st[g].ready == R_READY && !a.modal.open) { play_start(a, g); a.closeAfterPlay = a.run.proc != nullptr; }
         }
     }
     refresh_pads(a);
@@ -965,7 +988,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             a.dropped.clear();
             for (const std::string &p : d) fabricator_drop(a, p);
         }
-        if (!a.dropped.empty() && !a.modal.open && a.job.state.load() != 1 && !dlc_dupes_running()) {   // r25: after a duplicate check
+        if (!a.dropped.empty() && !a.modal.open && a.job.state.load() == 0 && !dlc_dupes_running()) {   // 0.6.6 (review #13): only once the last job's result was taken (install_poll sets 0), not while it is finishing   // r25: after a duplicate check
             std::string p = a.dropped.front();
             a.dropped.erase(a.dropped.begin());
             std::vector<std::string> dlc;
@@ -1062,8 +1085,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (std::any_of(a.dirty, a.dirty + G_COUNT, [](bool x) { return x; })) settings_save(a);
     a.ini.save();
     if (a.job.state.load() == 1) { a.job.cancel = true; }
+    while (g_backupState.load() == 1) SDL_Delay(50);   // 0.6.6 (review #21): a save backup still zipping finishes first
     if (a.job.th.joinable()) a.job.th.join();
     music_stop();
+    mod_conflicts_shutdown();   // the conflicts' worker stops between two mods
     fab_state_shutdown();   // the FABRICATOR: packs cancelled, unfinished installs' .partial folders removed
     for (auto &c : a.cover) if (c.tex) SDL_DestroyTexture(c.tex);
     ImGui_ImplSDLRenderer3_Shutdown();

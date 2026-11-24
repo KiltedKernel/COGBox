@@ -1,4 +1,4 @@
-// Layer 0 (game-free): temporal upscalers (NVIDIA DLSS, AMD FSR, Intel XeSS) behind one small interface (notes/64,
+// Layer 0 (game-free): temporal upscalers (NVIDIA DLSS, AMD FSR) behind one small interface (notes/64,
 // XeGTAO ambient occlusion, upscaler motion-vector / depth fixes and SMAA T2x: PR #139 by gmihaic (https://github.com/gmihaic).
 // notes/65), shared by the
 // Gears 2 and Gears 3 ports. The renderer supplies, per frame: the scene colour before post-processing, its depth, a
@@ -14,8 +14,8 @@
 //   - Matrices: row-major, clip_i = dot(row_i, (x, y, z, 1)). A game whose shaders compute x*c0 + y*c1 + z*c2 + c3
 //     (UE3, job 252) stores the transpose in its constants - FromConstants / FromConstantsTransposed.
 //   - Depth: guest convention (0 near .. 1 far, not inverted unless the game says so).
-// The SDK wrappers (dlss_upscaler.cpp, fsr_upscaler.cpp, xess_upscaler.cpp) are built only when their SDK is in
-// third_party (GN_HAVE_DLSS, GN_HAVE_FSR, GN_HAVE_XESS); without one, CreateUpscaler returns null and the launcher's
+// The SDK wrappers (dlss_upscaler.cpp, fsr_upscaler.cpp) are built only when their SDK is in
+// third_party (GN_HAVE_DLSS, GN_HAVE_FSR); without one, CreateUpscaler returns null and the launcher's
 // choice falls back to SMAA / off.
 // Our code (MIT). The SDKs keep their own licences (THIRD_PARTY_NOTICES.md).
 #pragma once
@@ -31,11 +31,11 @@ namespace xenos::renderer::upscale {
 
 // kSmaaT2x (notes/80 s.7): ours, no SDK - SMAA 1x with two alternating jitters and a temporal resolve, at the
 // render size (no upscaling); made by the renderer (it needs the shader cache), not by CreateUpscaler.
-enum class Kind : uint32_t { kNone, kDlss, kFsr, kXess, kSmaaT2x };
+enum class Kind : uint32_t { kNone, kDlss, kFsr, kSmaaT2x };
 // Render size / output size: 1 (native-resolution AA: DLAA / FSR "native AA"), 1.5, 1.7, 2.
 enum class Quality : uint32_t { kNativeAA, kQuality, kBalanced, kPerformance };
 
-Kind ParseKind(const std::string& name);  // "dlss", "fsr", "xess", "smaa_t2x", anything else -> kNone
+Kind ParseKind(const std::string& name);  // "dlss", "fsr", "smaa_t2x", anything else -> kNone
 const char* KindName(Kind kind);
 float QualityRatio(Quality quality);      // output / render per axis
 
@@ -127,7 +127,19 @@ struct SceneCopyPicker {
   // when it learned on a frame that only had the mid-frame copy (a menu, a transition, match start).
   static constexpr uint32_t kFormatPatience = 60;
   uint32_t format = 0, other_frames = 0;
-  bool Take(uint32_t copy_format = 0) {
+  // anchored (Judgment): the scene copy comes after an anchor pass (the fog pass). Judgment adds a mid-frame scene copy
+  // before its fog pass on some frames only (what is visible decides); counted, it moved the taken copy to before the
+  // fog - the AO that goes in at the fog pass was then left out of that frame (a one-frame flash) and the upscalers got
+  // the scene without its last passes. Once a frame has drawn the anchor with a copy after it, copies before the anchor
+  // are neither taken nor counted. A frame without the anchor takes no copy (whether one comes later can't be known at
+  // the copy); after kNoAnchorFrames such frames in a row (a pause or menu over the world) it lets go, as it does after
+  // kAnchorPatience frames that draw the anchor with no copy after it, and every copy counts again. The count starts
+  // over at each switch, so the two ways of counting never mix.
+  bool anchored = false;
+  static constexpr uint32_t kAnchorPatience = 60, kNoAnchorFrames = 2;
+  bool Take(uint32_t copy_format = 0, bool after_anchor = true) {
+    if (anchored && after_anchor) ++after_anchor_copies_;
+    if (anchored && anchor_active_ && !after_anchor) return false;
     if (last_only && copy_format) frame_last_ = copy_format;   // the frame's last copy of any format
     if (last_only && format && copy_format && copy_format != format) return false;
     const uint32_t index = count++;
@@ -139,7 +151,7 @@ struct SceneCopyPicker {
     }
     return !last_only || last_count == 0 || index + 1 >= last_count;
   }
-  void EndFrame() {
+  void EndFrame(bool anchor_seen = true) {
     bool relearn = false;
     if (last_only && format && frame_last_) {   // a frame with no copies at all says nothing
       if (frame_last_ != format) relearn = ++other_frames >= kFormatPatience;
@@ -158,6 +170,17 @@ struct SceneCopyPicker {
           if (formats_[i] == format) last_count = format_counts_[i];
       }
     }
+    if (anchored) {
+      const bool good = anchor_seen && after_anchor_copies_;
+      frames_without_anchor_ = good ? 0 : frames_without_anchor_ + 1;   // no copy after the anchor
+      frames_no_anchor_ = anchor_seen ? 0 : frames_no_anchor_ + 1;      // no anchor at all
+      const bool active = frames_without_anchor_ < kAnchorPatience && frames_no_anchor_ < kNoAnchorFrames;
+      if (active != anchor_active_) {
+        anchor_active_ = active;
+        last_count = 0;   // learnt again in the new way of counting
+      }
+    }
+    after_anchor_copies_ = 0;
     count = 0;
     frame_last_ = 0;
     n_formats_ = 0;
@@ -167,6 +190,8 @@ struct SceneCopyPicker {
  private:
   static constexpr uint32_t kMaxFormats = 16;   // distinct formats in one frame (a frame has two in practice)
   uint32_t frame_last_ = 0, n_formats_ = 0;
+  bool anchor_active_ = false;
+  uint32_t frames_without_anchor_ = kAnchorPatience, frames_no_anchor_ = 0, after_anchor_copies_ = 0;
   uint32_t formats_[kMaxFormats] = {}, format_counts_[kMaxFormats] = {};
 };
 
@@ -232,8 +257,8 @@ enum class ResizeMode : uint32_t {
   kRecreate,  // Configure with every frame's size (ours: SMAA T2x - its textures are cheap to remake)
   kPerFrame,  // FSR without the padding shader: created for the largest size; renderSize / upscaleSize per dispatch
               // below it (history reset on a size change)
-  kPadded,    // DLSS, XeSS, FSR: created once, always given the creation size (NGX takes a render subrect, but its
-              // output always fills the target; XeSS likewise; FSR 4 / older FSR 3.1 providers are not known to honour
+  kPadded,    // DLSS, FSR: created once, always given the creation size (NGX takes a render subrect, but its
+              // output always fills the target; FSR 4 / older FSR 3.1 providers are not known to honour
               // an upscaleSize below the maximum - r83 M1), so the renderer pads the frame's colour / depth / motion to
               // the creation size (edges repeated) and reads its own part of the output - the same pixels at the same
               // place as before

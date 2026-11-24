@@ -34,14 +34,12 @@ $ports = @(
 $projects = @('Gears2-Native', 'Gears3-Native', 'GearsJ-Native', 'Gears1-Native')
 # 0.4.9 (deps049): the vendor SDK versions the games build with (cmake/gn_deps.cmake) - their licence folders, and below
 # a check that every port ships exactly those DLLs (a stale build folder would otherwise ship the old ones).
-$sdks = @('rexglue-sdk', 'dlss-sdk', 'fidelityfx-sdk', 'xess-sdk-3.0.2', 'dxc-1.9.2609', 'antilag2-sdk', 'nvapi', 'streamline-sdk', 'agility-sdk-1.620.1')
+$sdks = @('rexglue-sdk', 'dlss-sdk', 'fidelityfx-sdk', 'dxc-1.9.2609', 'antilag2-sdk', 'nvapi', 'streamline-sdk', 'agility-sdk-1.620.1')
 $tpd = "$docs\Gears2-Native\third_party"
-$xessSdk = @(Get-ChildItem -LiteralPath "$tpd\xess-sdk-3.0.2" -Recurse -Depth 2 -Filter libxess.dll -File -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq 'bin' }) | Select-Object -First 1
 $pinned = [ordered]@{
   'D3D12\D3D12Core.dll' = "$tpd\agility-sdk-1.620.1\build\native\bin\x64\D3D12Core.dll"   # must match the exe's D3D12SDKVersion 620
   'dxcompiler.dll'       = "$tpd\dxc-1.9.2609\bin\x64\dxcompiler.dll"
   'dxil.dll'             = "$tpd\dxc-1.9.2609\bin\x64\dxil.dll"
-  'libxess.dll'          = $(if ($xessSdk) { $xessSdk.FullName } else { "$tpd\xess-sdk-3.0.2\bin\libxess.dll" })
 }
 $launcherSdl = '3.4.20'   # SDL3.dll beside CogBox.exe (SDL3-devel-3.4.20-mingw, the one build.sh links)
 
@@ -67,7 +65,7 @@ if ($NoNormalCode) { Write-Host '  note: -NoNormalCode is ignored (0.6.3: no -no
 foreach ($p in $ports) {
   foreach ($k in $pinned.Keys) {
     $f = Join-Path $p.from $k
-    if (-not (Test-Path -LiteralPath $f)) { if (-not ($p.noShared -and $k -in 'dxcompiler.dll', 'libxess.dll')) { $problems += "missing next to $($p.to): $k" }; continue }
+    if (-not (Test-Path -LiteralPath $f)) { if (-not ($p.noShared -and $k -in 'dxcompiler.dll')) { $problems += "missing next to $($p.to): $k" }; continue }
     if (-not (Test-Path -LiteralPath $pinned[$k])) { $problems += "no SDK copy to compare $k with: $($pinned[$k])"; continue }
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $pinned[$k]).Hash) {
       $problems += "$($p.to)\$k is not the 0.4.9 SDK's copy (file version $((Get-Item -LiteralPath $f).VersionInfo.FileVersion)) - rebuild" }
@@ -92,7 +90,8 @@ else {
   if (-not ($problems -match 'FFmpeg|av[a-z]+-\d+\.dll')) { Write-Host "  library music: CogBox.exe loads $($wantFf -join ' + '), both beside it" } }
 # 0.2.2 (Shagg: developer tools never ship): no profiler, debug runtime, symbols or test program in any port folder, and
 # no shipped program may load Tracy (TracyClient*.dll opens a network port; antivirus flags it, GitHub #24).
-$deny = '^(TracyClient.*\.dll|rexruntimerd\.dll|rexgpu-.*rd\.dll|.*\.pdb|.*\.ilk|.*\.exp|.*\.lib|gn_tests\.exe|.*\.pre.*|.*\.old-.*|.*\.bak)$'
+# 0.6.6: Intel's upscaler and frame generation are dropped - their DLLs (the first three names) left in an old build folder must not ship
+$deny = '^(libxess\.dll|libxess_fg\.dll|libxell\.dll|TracyClient.*\.dll|rexruntimerd\.dll|rexgpu-.*rd\.dll|.*\.pdb|.*\.ilk|.*\.exp|.*\.lib|gn_tests\.exe|.*\.pre.*|.*\.old-.*|.*\.bak)$'
 foreach ($p in $ports) {
   if (-not (Test-Path $p.from)) { continue }
   foreach ($f in @(Get-ChildItem -LiteralPath $p.from -File -Filter *.dll -ErrorAction SilentlyContinue)) {
@@ -245,7 +244,7 @@ foreach ($sdk in $sdks) {
   $dir = "$docs\Gears2-Native\third_party\$sdk"
   if (-not (Test-Path $dir)) { Write-Host "note: SDK folder not found: $sdk"; continue }
   $found = @(Get-ChildItem -LiteralPath $dir -File -Recurse -Depth 2 -ErrorAction SilentlyContinue |
-             Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)' -or $_.Name -match '^license\.(md|txt)$' -or $_.Name -match 'license.*\.(md|txt|rtf|pdf)$' -or $_.Name -match '^third-party-programs\.txt$' } |   # xefg049: Intel's third-party-programs.txt (its LICENSE.txt points to it)
+             Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)' -or $_.Name -match '^license\.(md|txt)$' -or $_.Name -match 'license.*\.(md|txt|rtf|pdf)$' } |
              # 0.2.2: only licences, and only of what ships - not a licence checker's config, the test framework, the
              # build tools or the profiler (none of them is in the zip)
              Where-Object { $_.Extension -ne '.cfg' -and $_.FullName -notmatch '\\thirdparty\\(catch2|tracy)\\' -and $_.FullName -notmatch '\\tools\\binutils\\' })
@@ -262,19 +261,19 @@ foreach ($sdk in $sdks) {
 }
 # The upscaler and shader-compiler DLLs that are byte-identical in every build go in once, in shared\ (Shagg 20:27,
 # option 1); COGBox puts that folder on each game's PATH and passes --gow2_dxc_dir. Checked in job 487 (all three games
-# start with FSR and with XeSS from this layout).
+# start with FSR from this layout).
 # 0.4.9 (shared049, docs/plan-049-shared-dlls.md): also NVIDIA DLSS (nvngx_dlss.dll: the game's NGX looks beside the exe,
 # then in shared\), dxil.dll (DXC loads it beside dxcompiler.dll), the AMD Vulkan DLLs (by name: shared\ is on the PATH,
 # else gn_shared_dlls loads the loader from shared\) and NVIDIA Streamline (the game takes the whole set from shared\).
 # They were byte-identical in all four 0.4.8 port folders: ~315 MiB less unpacked. Still beside each exe: the exe,
 # rexruntime.dll / rexgpu-xenos.dll (load-time imports: Windows looks only beside the exe, System32 and PATH) and
 # D3D12\D3D12Core.dll (the exe's D3D12SDKPath is relative to the exe).
-$sharedNames = @('libxess.dll', 'amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll', 'amd_fidelityfx_framegeneration_dx12.dll', 'dxcompiler.dll',
+$sharedNames = @('amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll', 'amd_fidelityfx_framegeneration_dx12.dll', 'dxcompiler.dll',
                  'dxil.dll', 'nvngx_dlss.dll', 'amd_fidelityfx_loader_vk.dll', 'amd_fidelityfx_framegeneration_vk.dll')
 $sharedOptional = @('amd_fidelityfx_upscaler_vk.dll')   # fsr049: shared when the builds have it (all the same), else a note
 $sh = Join-Path $stage 'shared'; New-Item -ItemType Directory -Force $sh | Out-Null
 foreach ($n in $sharedNames + $sharedOptional) {
-  $needed = @($ports | Where-Object { -not ($_.noShared -and $n -in 'dxcompiler.dll', 'libxess.dll', 'amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll', 'amd_fidelityfx_framegeneration_dx12.dll') })
+  $needed = @($ports | Where-Object { -not ($_.noShared -and $n -in 'dxcompiler.dll', 'amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll', 'amd_fidelityfx_framegeneration_dx12.dll') })
   $copies = @($ports | ForEach-Object { Join-Path $_.from $n } | Where-Object { Test-Path $_ })
   $hashes = @($copies | ForEach-Object { (Get-FileHash -Algorithm SHA256 -LiteralPath $_).Hash } | Sort-Object -Unique)
   if ($n -in $sharedOptional -and -not $copies.Count) { Write-Host "  note: no build has $n - not shipped"; continue }
@@ -293,10 +292,6 @@ foreach ($p in $ports) {
   $ag = Join-Path $p.from 'D3D12\D3D12Core.dll'
   New-Item -ItemType Directory -Force (Join-Path $dst 'D3D12') | Out-Null; Copy-Item $ag (Join-Path $dst 'D3D12')
   # 0.4.8 put the Streamline runtime and the AMD Vulkan DLLs here; 0.4.9 (shared049): in shared\ (above)
-  # xefg049: Intel XeSS frame generation (Gears 2 only for now) - libxess_fg.dll + libxell.dll come from the build folder
-  # with the DLL loop above (Gears 2's CMake copies them from the XeSS 3 SDK); without them the launcher hides the choice
-  if ($p.exe -eq 'gow2.exe') { foreach ($f in 'libxess_fg.dll', 'libxell.dll') {
-    if (-not (Test-Path (Join-Path $dst $f))) { Write-Host "  note: $($p.to) has no $f - no Intel XeSS frame generation there" } } }
 }
 if (@($ports | Where-Object { $_.dlssg }).Count) {
   $sld = Join-Path $lic 'streamline-release'; New-Item -ItemType Directory -Force $sld | Out-Null
@@ -326,7 +321,6 @@ $licRules = [ordered]@{
   '^nvngx_dlss(g)?\.dll$'                        = @('dlss-sdk\LICENSE.txt', 'NVIDIA-Streamline-DLSS-G-NOTICE.txt')
   '^sl\..+\.dll$'                                = @('streamline-sdk\license.txt', 'streamline-release\reflex.license.txt', 'NVIDIA-Streamline-DLSS-G-NOTICE.txt')
   '^amd_fidelityfx_.+\.dll$'                     = @('AMD-FidelityFX-SDK-LICENSE.md')
-  '^(libxess|libxess_fg|libxell)\.dll$'          = @('xess-sdk-3.0.2\*\LICENSE.txt', 'xess-sdk-3.0.2\*\third-party-programs.txt')
 }
 $licProblems = @()
 foreach ($lh in @('') + $licHomes) {
@@ -366,18 +360,26 @@ public static class CogBoxPack {
 }
 '@
 }
-if ($un -and $un.Length -ge 3) {
-  $rep = ('user' + ('1' * 40)).Substring(0, $un.Length)
+# 0.6.6 (review #6): a one- or two-letter name used to skip both the replacement and the check. A short name can't be
+# searched for alone (it is in every program by chance), so it is searched for as the folder the compiler writes:
+# Users\<name>\ and Users/<name>/ - the same number of letters swapped in, as for longer names.
+$pairs = @()
+if ($un -and $un.Length -ge 3) { $pairs += ,@($un, ('user' + ('1' * 40)).Substring(0, $un.Length)) }
+elseif ($un) {
+  $r = ('u' * $un.Length)
+  foreach ($sep in '\', '/') { $pairs += ,@("Users$sep$un$sep", "Users$sep$r$sep") }
+}
+if ($pairs.Count) {
   # NVIDIA's signed DLLs are never rewritten (a changed byte breaks the signature the port checks)
   foreach ($f in @(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' -and $_.Name -notmatch $slPattern })) {
     $b = [IO.File]::ReadAllBytes($f.FullName); $n = 0
     foreach ($enc in @([Text.Encoding]::ASCII, [Text.Encoding]::Unicode)) {
-      $n += [CogBoxPack]::Swap($b, $enc.GetBytes($un.ToLower()), $enc.GetBytes($un.ToUpper()), $enc.GetBytes($rep))
+      foreach ($pr in $pairs) { $n += [CogBoxPack]::Swap($b, $enc.GetBytes($pr[0].ToLower()), $enc.GetBytes($pr[0].ToUpper()), $enc.GetBytes($pr[1])) }
     }
     if ($n) { [IO.File]::WriteAllBytes($f.FullName, $b); Write-Host "  user name replaced $n time(s) in $($f.FullName.Substring($stage.Length + 1))" }
   }
   # the check: the name must be gone from every file in the package
-  $left = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -notmatch $slPattern } | Where-Object { $t = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($_.FullName)); $u = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($_.FullName)); $t -match [regex]::Escape($un) -or $u -match [regex]::Escape($un) -or $t -match [regex]::Escape($env:COMPUTERNAME) -or $u -match [regex]::Escape($env:COMPUTERNAME) })   # -match ignores case; both names in both encodings
+  $left = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -notmatch $slPattern } | Where-Object { $t = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($_.FullName)); $u = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($_.FullName)); @($pairs | Where-Object { $t -match [regex]::Escape($_[0]) -or $u -match [regex]::Escape($_[0]) }).Count -or $t -match [regex]::Escape($env:COMPUTERNAME) -or $u -match [regex]::Escape($env:COMPUTERNAME) })   # -match ignores case; both names in both encodings
   if ($left.Count) { $left | ForEach-Object { Write-Host "PROBLEM: the user or PC name is still in $($_.FullName)" }; Write-Host 'RESULT: FAIL'; exit 1 }
   Write-Host '  check: no user name or PC name left in any file of the package'
 }

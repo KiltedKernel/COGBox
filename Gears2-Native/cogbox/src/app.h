@@ -19,10 +19,13 @@
 #include "util.h"
 #include "proton.h"   // proton049
 
-#define COGBOX_VERSION "0.6.4"
+#define COGBOX_VERSION "0.6.7"
 #define COGBOX_NAME "COGBox"
 
 namespace gs = cogbox::gears;
+// The page's tabs after gs::Tab's (GitHub #425: named here, so a new settings tab moves them all - page.cpp's k_tabs)
+constexpr int kTabSocial = (int)gs::Tab::Achievements + 1, kTabMods = kTabSocial + 1, kTabAbout = kTabMods + 1;
+constexpr int kTabCount = kTabAbout + 1;
 
 struct Cover {
     SDL_Texture *tex = nullptr;   // the player's own scan (covers\gears2.png ...), nullptr = drawn by COGBox
@@ -73,6 +76,7 @@ struct App {
     SDL_Window *win = nullptr;
     SDL_Renderer *ren = nullptr;
     bool quit = false;
+    bool closeAfterPlay = false;   // 0.6.6 (GitHub #374): started with --play - close once that game ends normally
     Ini ini;
     GameState st[G_ALL];
     Cover cover[G_ALL];
@@ -90,7 +94,7 @@ struct App {
     // pages
     Screen screen = SCR_FRONT;
     int page = 0;                     // the game whose page is shown
-    int tab = 0;
+    int tab = 0;                      // the page's tab: gs::Tab's first (DISPLAY ... ACHIEVEMENTS), then kTabSocial ...
     int fabTab = 0;                   // the FABRICATOR screen's tab: 0 Library, 1 Store, 2 Creator
     int barSel = -1;                  // a page's bottom bar chosen with the controller: -1 none (in the rows), 0 Library, 1 Save, 2 Play
     double zoomStart = -10;           // the front <-> page transition
@@ -103,10 +107,13 @@ struct App {
     Running run;
     std::vector<std::string> gpus;    // graphics cards (DXGI)
     std::vector<GpuCard> gpuCards;    // 0.6.2 (#304): the cards the Graphics card option offers (name + video memory)
+    std::vector<std::string> audioDevices;   // GitHub #425: the sound output devices the Output device option offers
     bool hasAvx2 = true;
     bool padConnected = false;
     bool lastPad = true;              // 0.2.0: the last input came from a controller (hints follow it), else keyboard / mouse
     std::string joinLobby[G_COUNT];   // social step 3: the next start of this game joins that room code (Join friend)
+    bool coldPrepOk[G_COUNT] = {};      // 0.6.5: "Play now" chosen at the cold-start question (until the launcher closes)
+    bool prepThenPlay[G_COUNT] = {};    // 0.6.5: a Prepare all shaders run started from that question - play when it ends
     bool misplacedAsked[G_COUNT] = {};  // 0.6.4: the hand-copied saves question was asked for this Play (play.cpp)
     bool tuMismatchOk[G_COUNT] = {};  // TU preflight: "Play anyway" chosen for this game (until the launcher closes)
     bool padPs = false;               // job 523: the controller is a PlayStation one (button names: Cross, Circle...)
@@ -247,6 +254,8 @@ bool mods_unpack_zip_in(const std::string &dataDir, const std::string &zipPath, 
 void mods_store(App &a, int game, const std::vector<ModItem> &v);   // the order and on/off state, as listed
 void mods_turn_on_last(App &a, int game, const std::string &folder);   // a new mod: on, last in the order
 void mods_remove_tree(const std::wstring &dir);   // only a folder COGBox made itself (a .partial unpacking, a backup)
+void cogbox_remove_tree(const std::wstring &dir);   // a folder of COGBox's own outside the mods (fabricator\work): never through a link
+// (real_path / is_plain_child, review r369 F1: util.h)
 void install_poll(App &a);
 void install_draw(App &a, ImVec2 size);
 // play.cpp
@@ -279,3 +288,6 @@ void music_stop();                            // at exit
 int music_test(const std::string &key, const std::string &copy, const std::string &report);   // --musictest
 int music_scan(const std::string &folder, const std::string &report);                         // --musicscan
 int music_probe(const std::string &file, const std::string &report);                          // --musicprobe
+std::vector<std::string> audio_output_devices();   // GitHub #425: SDL's sound output devices' names (empty: none / no audio)
+void audio_devices_refresh(App &a, bool force = false);   // ... into a.audioDevices and every game's env (start, Audio tab,
+                                                          // Play); read at most every 3 s unless forced

@@ -52,9 +52,9 @@ and our own renderer draws every frame on Direct3D 12 (or Vulkan).
 
 - **Any resolution** up to 5K, or matched to your monitor, with real extra detail; **ultrawide** up to 48:9 (three
   screens) and **HDR10**.
-- **Modern lighting extras** (experimental, off by default): XeGTAO or CACAO ambient occlusion, PCSS soft shadows
+- **Modern lighting extras** (off by default): modern ambient occlusion (XeGTAO; one Default / On switch), and experimental PCSS soft shadows
   (Gears 3 and Judgment) and screen-space indirect lighting.
-- **Upscaling and anti-aliasing:** SMAA, AMD FSR, NVIDIA DLSS and Intel XeSS (experimental).
+- **Upscaling and anti-aliasing:** SMAA, AMD FSR and NVIDIA DLSS (experimental).
 - **High frame rates:** the 30 fps limit lifted, frame-rate caps from 30 to 180 (and 40 / 45 for the Steam Deck), and
   frame generation (AMD FSR, NVIDIA DLSS on RTX 40/50; experimental).
 - **Lower input lag:** NVIDIA Reflex and AMD Anti-Lag 2 where your GPU has them.
@@ -215,7 +215,7 @@ This project stands on the work of many open-source projects and communities:
   **[DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler)**, the
   **[Vulkan Headers](https://github.com/KhronosGroup/Vulkan-Headers)**, the **DirectX 12 Agility SDK** and
   **[NVIDIA FLIP](https://github.com/NVlabs/flip)**.
-- **AMD FidelityFX**, **NVIDIA DLSS, Streamline and Reflex**, and **Intel XeSS**.
+- **AMD FidelityFX** and **NVIDIA DLSS, Streamline and Reflex**.
 - The **[LaunchBox Games Database](https://gamesdb.launchbox-app.com/)** and
   **[x360db](https://github.com/xenia-manager/x360db)** for box art and backgrounds.
 - The **Gears community patches** (ultrawide by boma and TudorHorse) and
@@ -244,7 +244,7 @@ already asks you to keep the copyright notice in copies of the code.)
 Also used, each under its own licence: Xenia / Canary / Edge (BSD-3), the rexglue SDK (BSD-style), FFmpeg (LGPL-2.1+,
 for XMA music and in-game audio), SDL3 (zlib), Dear ImGui (MIT), SMAA (MIT), PsychoV35 and RenoDX's HDR grading (MIT), xxHash (BSD-2), miniz (MIT), stb (MIT), the DirectX
 Shader Compiler, the Vulkan Headers, AMD FidelityFX and Anti-Lag 2, NVIDIA DLSS, DLSS Frame Generation, Streamline (MIT) and
-Reflex (NVIDIA RTX SDKs License / Reflex SDK licence), Intel XeSS, and the
+Reflex (NVIDIA RTX SDKs License / Reflex SDK licence), and the
 Anton / Barlow / Inter fonts (SIL OFL). Full texts are in [`THIRD_PARTY_NOTICES.md`](Gears2-Native/THIRD_PARTY_NOTICES.md)
 and the release's `licenses` folder.
 
@@ -253,27 +253,24 @@ and the release's `licenses` folder.
   NVIDIA, GeForce RTX, DLSS and Reflex are trademarks of NVIDIA Corporation.
 - AMD FidelityFX™ Super Resolution (FSR) — Uses AMD FidelityFX FSR technology (AMD FidelityFX SDK).
   AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc.
-- Intel® XeSS — Uses Intel XeSS technology (XeSS Super Resolution, XeSS Frame Generation, XeLL).
-  Intel and XeSS are trademarks of Intel Corporation or its subsidiaries.
 
 What ships in the download, and under which terms (the last column is the path inside the release download; in this
 repository the texts are in `Gears2-Native/THIRD_PARTY_NOTICES.md` and `Gears2-Native/cogbox/licenses/`):
 
 | Component (shipped in the download) | Version | Licence | Text in the download |
 |---|---|---|---|
-| COGBox launcher and the ports' own code | 0.6.4 | MIT | `LICENSE.txt` |
+| COGBox launcher and the ports' own code | 0.6.7 | MIT | `LICENSE.txt` |
 | rexglue SDK runtime (`rexruntime.dll`, `rexgpu-xenos.dll`), derived from Xenia | 0.10.0-dev (bd833a2 + our patches) | BSD-3-Clause | `licenses\rexglue-sdk\` (+ its bundled libraries' licences) |
 | Xenia / Canary / Edge code ported into the renderer | Canary e6cd2e4, Edge 5045c19 | BSD-3-Clause | `licenses\Xenia-LICENSE.txt` |
 | FFmpeg XMA decoder (`avcodec-63.dll`, `avutil-61.dll`; also linked into `rexruntime.dll`) | 9.0.2 (launcher); Xenia fork (runtime) | LGPL-2.1-or-later (not a GPL build) | `licenses\FFmpeg-NOTICE.txt`, `FFmpeg-LGPL-2.1.txt` |
 | SDL3 (`SDL3.dll`) | 3.4.20 | zlib | `licenses\SDL3-LICENSE.txt` |
 | Dear ImGui, miniz, stb (stb_image, stb_dxt), LZMA SDK 7z decoder | - | MIT / MIT / MIT or public domain / public domain | `licenses\` |
-| SMAA, XeGTAO, FidelityFX CACAO, modcore (KiltedKernel), native mouse look (gow2/gow3-recomp) | - | MIT / MIT / MIT / MIT / BSD-3-Clause | `licenses\Gears2-Native-THIRD_PARTY_NOTICES.md`, `licenses\modcore-LICENSE.txt` (in this repository: `Gears2-Native/THIRD_PARTY_NOTICES.md`) |
+| SMAA, XeGTAO, modcore (KiltedKernel), native mouse look (gow2/gow3-recomp) | - | MIT / MIT / MIT / BSD-3-Clause | `licenses\Gears2-Native-THIRD_PARTY_NOTICES.md`, `licenses\modcore-LICENSE.txt` (in this repository: `Gears2-Native/THIRD_PARTY_NOTICES.md`) |
 | PsychoV35 HDR tone mapping (Carlos Lopez / ShortFuse; self-contained edition by mqhaji) and RenoDX grading code (ShortFuse and the RenoDX contributors) - Gears 2 and Gears 3 native HDR | - | MIT / MIT | `PsychoV35-LICENSE.txt`, `RenoDX-Grading-LICENSE.txt` in the Gears 2 and Gears 3 folders' `licenses` |
 | NVIDIA DLSS Super Resolution and Frame Generation (`nvngx_dlss.dll`, `nvngx_dlssg.dll`) | 310.9.16 | NVIDIA RTX SDKs License (v. March 14, 2024), proprietary | `licenses\NVIDIA-Streamline-DLSS-G-NOTICE.txt`, `licenses\dlss-sdk\` |
 | NVIDIA Streamline (`sl.*.dll`) and Reflex | 2.14.16 | MIT (Streamline); NVIDIA Reflex SDK licence | `licenses\streamline-sdk\`, `licenses\streamline-release\` |
 | AMD FidelityFX SDK: FSR upscaler, frame generation, loaders (DX12 and Vulkan) | SDK 2.4.0 (upscaler 4.1.2, FG 4.0.2) | AMD FidelityFX licence (binary-only redistribution) | `licenses\AMD-FidelityFX-SDK-LICENSE.md`, `licenses\fidelityfx-sdk\` |
 | AMD Anti-Lag 2 (header only, no DLL) | 2.0.0a | MIT | `licenses\antilag2-sdk\` |
-| Intel XeSS (`libxess.dll`), XeSS Frame Generation (`libxess_fg.dll`), XeLL (`libxell.dll`) | 2.0.2.68 / 1.3.1.78 / 1.3.2.10 | Intel Simplified Software License (Oct 2022), proprietary | `licenses\xess-sdk-3.0.2\` (+ `third-party-programs.txt`) |
 | Microsoft DirectX 12 Agility SDK (`D3D12Core.dll`) | 1.620.1 | Microsoft Software License Terms (redistributable) | `licenses\Microsoft-DirectX-redist-NOTICE.txt`, `licenses\agility-sdk-1.620.1\` |
 | Microsoft DirectX Shader Compiler (`dxcompiler.dll`, `dxil.dll`) | 1.9.2609 | Microsoft Software License Terms (redistributable); LLVM / MIT parts | `licenses\Microsoft-DirectX-redist-NOTICE.txt`, `licenses\dxc-1.9.2609\` |
 | Fonts: Anton, Barlow, Barlow Condensed, Inter 4.1, Noto Sans | - | SIL Open Font License 1.1 | `licenses\*-OFL.txt`, `assets\fonts\` |
